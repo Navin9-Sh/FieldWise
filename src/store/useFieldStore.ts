@@ -44,6 +44,8 @@ interface FieldState {
   projection: LocalProjection | null
   /** Recomputed by the planner whenever boundary/zones/profile/strategy change. */
   sprayPlan: SprayPlan | null
+  /** Set instead of sprayPlan when the planner throws (e.g. a drone profile field edited down to 0) — keeps a bad live edit from crashing the app. */
+  planError: string | null
   /** Recomputed by the readiness engine whenever boundary edge provenance changes. */
   readiness: ReadinessSummary | null
 
@@ -75,6 +77,7 @@ interface FieldState {
 interface DerivedFields {
   projection: LocalProjection | null
   sprayPlan: SprayPlan | null
+  planError: string | null
   readiness: ReadinessSummary | null
   lastRecomputeMs: number
 }
@@ -101,7 +104,7 @@ function recompute(input: {
   const { boundary, noSprayZones, droneProfile, sweepStrategy } = input
 
   if (!boundary) {
-    return { projection: null, sprayPlan: null, readiness: null, lastRecomputeMs: performance.now() - t0 }
+    return { projection: null, sprayPlan: null, planError: null, readiness: null, lastRecomputeMs: performance.now() - t0 }
   }
 
   const origin = approximateCentroidLatLng(boundary.vertices)
@@ -110,17 +113,24 @@ function recompute(input: {
   const noSprayZonesLocal = noSprayZones.map((zone) => projectAll(projection, zone.vertices))
 
   const readiness = computeReadiness(boundary, boundaryLocal)
-  const sprayPlan = planSprayPath({
-    boundaryLocal,
-    noSprayZonesLocal,
-    droneProfile,
-    sweepStrategy,
-  })
+
+  // A live-editable drone profile (the Plan panel's NumberFields) can
+  // transiently hold an invalid value (e.g. a field cleared mid-edit) —
+  // planSprayPath validates and throws rather than silently misbehaving,
+  // so this must not be allowed to crash the whole store. Readiness
+  // above is computed either way, since it doesn't depend on the profile.
+  let sprayPlan: SprayPlan | null = null
+  let planError: string | null = null
+  try {
+    sprayPlan = planSprayPath({ boundaryLocal, noSprayZonesLocal, droneProfile, sweepStrategy })
+  } catch (err) {
+    planError = err instanceof Error ? err.message : 'Failed to plan the spray path.'
+  }
 
   const lastRecomputeMs = performance.now() - t0
   console.log(`[FieldWise] Re-planned in ${lastRecomputeMs.toFixed(1)}ms`)
 
-  return { projection, sprayPlan, readiness, lastRecomputeMs }
+  return { projection, sprayPlan, planError, readiness, lastRecomputeMs }
 }
 
 const initialState = {
@@ -131,6 +141,7 @@ const initialState = {
   sweepStrategy: { kind: 'min-turns' } as SweepStrategy,
   projection: null as LocalProjection | null,
   sprayPlan: null as SprayPlan | null,
+  planError: null as string | null,
   readiness: null as ReadinessSummary | null,
   selectedEdgeId: null as string | null,
   lastRecomputeMs: null as number | null,

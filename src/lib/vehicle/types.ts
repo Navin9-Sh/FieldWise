@@ -1,0 +1,82 @@
+/**
+ * VehicleLink is the hardware-agnostic contract everything above it
+ * (the Send-to-Vehicle panel, and later the Blind vs. Sighted replay)
+ * talks to. WebSerialVehicle (Pixhawk over USB, this pass) is the first
+ * implementation; a PiRelayVehicle (Pixhawk -> Pi -> WebSocket) is a
+ * same-interface drop-in for later if there's time, and a SimVehicle
+ * (no hardware required) is the no-hardware demo fallback that doesn't
+ * exist yet — see the project status notes. No UI code should ever
+ * import WebSerialVehicle directly; it should only ever hold a
+ * `VehicleLink`.
+ */
+import type { LatLng } from '@/lib/geo/types'
+
+export type GpsFixType = 'no-gps' | 'no-fix' | '2d' | '3d' | 'dgps' | 'rtk-float' | 'rtk-fixed' | 'static' | 'unknown'
+
+export interface VehicleTelemetry {
+  /** True once a heartbeat has been seen recently; see heartbeatAgeMs. */
+  heartbeatOk: boolean
+  /** ms since the last heartbeat was received, or null if none seen yet. */
+  heartbeatAgeMs: number | null
+  gps: {
+    fixType: GpsFixType
+    satellites: number | null
+    /** Horizontal dilution of precision, ×100 as MAVLink reports it, already divided back to a plain ratio. */
+    hdop: number | null
+    position: LatLng | null
+  }
+  attitude: {
+    rollDeg: number
+    pitchDeg: number
+    yawDeg: number
+  } | null
+}
+
+export const EMPTY_TELEMETRY: VehicleTelemetry = {
+  heartbeatOk: false,
+  heartbeatAgeMs: null,
+  gps: { fixType: 'unknown', satellites: null, hdop: null, position: null },
+  attitude: null,
+}
+
+/** One mission waypoint, in the vehicle-native form (MAV_CMD + a position). Altitude is relative-to-home, meters. */
+export interface MissionWaypoint {
+  seq: number
+  position: LatLng
+  altM: number
+  /** MAV_CMD id — this project only ever sends MAV_CMD_NAV_WAYPOINT (16). */
+  command: number
+}
+
+export interface MissionUploadResult {
+  uploadedCount: number
+  /** The mission read back from the vehicle immediately after upload, for verification. */
+  readBack: MissionWaypoint[]
+  /** True only if every waypoint's position/altitude round-tripped within tolerance. */
+  verified: boolean
+  mismatches: Array<{ seq: number; reason: string }>
+}
+
+export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+export interface VehicleLinkEvents {
+  onTelemetry: (telemetry: VehicleTelemetry) => void
+  onConnectionStateChange: (state: ConnectionState) => void
+  /** Non-fatal, human-readable protocol/transport events worth surfacing in a log (a rejected mission item, a retry, a parse error). */
+  onLog: (message: string) => void
+}
+
+export interface VehicleLink {
+  readonly kind: string
+
+  connect(): Promise<void>
+  disconnect(): Promise<void>
+  getConnectionState(): ConnectionState
+
+  /** Uploads a mission (the standard MAVLink COUNT -> per-item REQUEST/ITEM handshake -> ACK), then downloads it back and diffs it against what was sent. */
+  uploadAndVerifyMission(waypoints: MissionWaypoint[]): Promise<MissionUploadResult>
+
+  onTelemetry(listener: VehicleLinkEvents['onTelemetry']): () => void
+  onConnectionStateChange(listener: VehicleLinkEvents['onConnectionStateChange']): () => void
+  onLog(listener: VehicleLinkEvents['onLog']): () => void
+}

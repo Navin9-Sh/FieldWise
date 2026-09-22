@@ -1,0 +1,239 @@
+/**
+ * The small subset of MAVLink v2 `common`/`minimal` dialect messages
+ * this project needs. Every MSG_ID / PAYLOAD_LENGTH / CRC_EXTRA / field
+ * offset below was read directly from the official generated message
+ * definitions (the `mavlink-mappings` npm package's compiled dialect
+ * files, which are code-generated from MAVLink's own XML — the same
+ * source QGroundControl, Mission Planner, and pymavlink are generated
+ * from) during development, not recalled from memory. See the project
+ * notes for exactly which file/line each came from if these ever need
+ * re-checking against a newer MAVLink release.
+ *
+ * Field lists below cover only the non-extension fields this app reads
+ * or writes. MAVLink v2 requires senders to truncate trailing
+ * zero-valued bytes from a payload, and requires receivers to treat any
+ * bytes missing from a short payload as zero — codec.ts implements both
+ * sides of that rule, which is what makes omitting a message's
+ * extension fields here safe rather than a silent bug: we simply never
+ * populate them (they encode as zero, and typically get truncated away),
+ * and we never expect the peer to have sent them.
+ */
+import type { FieldType } from './codec'
+
+export interface FieldDef {
+  /** camelCase — matches the decoded object's property name. */
+  name: string
+  offset: number
+  type: FieldType
+}
+
+export interface MessageDef {
+  id: number
+  name: string
+  /** Full (non-truncated) payload length, including extension fields we don't model. */
+  payloadLength: number
+  /** The message's CRC_EXTRA constant (called MAGIC_NUMBER in mavlink-mappings). */
+  crcExtra: number
+  fields: FieldDef[]
+}
+
+export const HEARTBEAT: MessageDef = {
+  id: 0,
+  name: 'HEARTBEAT',
+  payloadLength: 9,
+  crcExtra: 50,
+  fields: [
+    { name: 'customMode', offset: 0, type: 'uint32' },
+    { name: 'type', offset: 4, type: 'uint8' },
+    { name: 'autopilot', offset: 5, type: 'uint8' },
+    { name: 'baseMode', offset: 6, type: 'uint8' },
+    { name: 'systemStatus', offset: 7, type: 'uint8' },
+    { name: 'mavlinkVersion', offset: 8, type: 'uint8' },
+  ],
+}
+
+export const GPS_RAW_INT: MessageDef = {
+  id: 24,
+  name: 'GPS_RAW_INT',
+  payloadLength: 52,
+  crcExtra: 24,
+  fields: [
+    { name: 'timeUsec', offset: 0, type: 'uint64' },
+    { name: 'lat', offset: 8, type: 'int32' },
+    { name: 'lon', offset: 12, type: 'int32' },
+    { name: 'alt', offset: 16, type: 'int32' },
+    { name: 'eph', offset: 20, type: 'uint16' },
+    { name: 'epv', offset: 22, type: 'uint16' },
+    { name: 'vel', offset: 24, type: 'uint16' },
+    { name: 'cog', offset: 26, type: 'uint16' },
+    { name: 'fixType', offset: 28, type: 'uint8' },
+    { name: 'satellitesVisible', offset: 29, type: 'uint8' },
+  ],
+}
+
+export const ATTITUDE: MessageDef = {
+  id: 30,
+  name: 'ATTITUDE',
+  payloadLength: 28,
+  crcExtra: 39,
+  fields: [
+    { name: 'timeBootMs', offset: 0, type: 'uint32' },
+    { name: 'roll', offset: 4, type: 'float' },
+    { name: 'pitch', offset: 8, type: 'float' },
+    { name: 'yaw', offset: 12, type: 'float' },
+    { name: 'rollspeed', offset: 16, type: 'float' },
+    { name: 'pitchspeed', offset: 20, type: 'float' },
+    { name: 'yawspeed', offset: 24, type: 'float' },
+  ],
+}
+
+export const GLOBAL_POSITION_INT: MessageDef = {
+  id: 33,
+  name: 'GLOBAL_POSITION_INT',
+  payloadLength: 28,
+  crcExtra: 104,
+  fields: [
+    { name: 'timeBootMs', offset: 0, type: 'uint32' },
+    { name: 'lat', offset: 4, type: 'int32' },
+    { name: 'lon', offset: 8, type: 'int32' },
+    { name: 'alt', offset: 12, type: 'int32' },
+    { name: 'relativeAlt', offset: 16, type: 'int32' },
+    { name: 'vx', offset: 20, type: 'int16' },
+    { name: 'vy', offset: 22, type: 'int16' },
+    { name: 'vz', offset: 24, type: 'int16' },
+    { name: 'hdg', offset: 26, type: 'uint16' },
+  ],
+}
+
+export const MISSION_REQUEST: MessageDef = {
+  id: 40, // legacy (pre-MISSION_REQUEST_INT); some older firmware still uses this
+  name: 'MISSION_REQUEST',
+  payloadLength: 5,
+  crcExtra: 230,
+  fields: [
+    { name: 'seq', offset: 0, type: 'uint16' },
+    { name: 'targetSystem', offset: 2, type: 'uint8' },
+    { name: 'targetComponent', offset: 3, type: 'uint8' },
+  ],
+}
+
+export const MISSION_REQUEST_LIST: MessageDef = {
+  id: 43,
+  name: 'MISSION_REQUEST_LIST',
+  payloadLength: 3,
+  crcExtra: 132,
+  fields: [
+    { name: 'targetSystem', offset: 0, type: 'uint8' },
+    { name: 'targetComponent', offset: 1, type: 'uint8' },
+  ],
+}
+
+export const MISSION_COUNT: MessageDef = {
+  id: 44,
+  name: 'MISSION_COUNT',
+  payloadLength: 9,
+  crcExtra: 221,
+  fields: [
+    { name: 'count', offset: 0, type: 'uint16' },
+    { name: 'targetSystem', offset: 2, type: 'uint8' },
+    { name: 'targetComponent', offset: 3, type: 'uint8' },
+  ],
+}
+
+export const MISSION_ITEM_REACHED: MessageDef = {
+  id: 46,
+  name: 'MISSION_ITEM_REACHED',
+  payloadLength: 2,
+  crcExtra: 11,
+  fields: [{ name: 'seq', offset: 0, type: 'uint16' }],
+}
+
+export const MISSION_ACK: MessageDef = {
+  id: 47,
+  name: 'MISSION_ACK',
+  payloadLength: 8,
+  crcExtra: 153,
+  fields: [
+    { name: 'targetSystem', offset: 0, type: 'uint8' },
+    { name: 'targetComponent', offset: 1, type: 'uint8' },
+    { name: 'type', offset: 2, type: 'uint8' },
+  ],
+}
+
+export const MISSION_REQUEST_INT: MessageDef = {
+  id: 51,
+  name: 'MISSION_REQUEST_INT',
+  payloadLength: 5,
+  crcExtra: 196,
+  fields: [
+    { name: 'seq', offset: 0, type: 'uint16' },
+    { name: 'targetSystem', offset: 2, type: 'uint8' },
+    { name: 'targetComponent', offset: 3, type: 'uint8' },
+  ],
+}
+
+export const MISSION_ITEM_INT: MessageDef = {
+  id: 73,
+  name: 'MISSION_ITEM_INT',
+  payloadLength: 38,
+  crcExtra: 38,
+  fields: [
+    { name: 'param1', offset: 0, type: 'float' },
+    { name: 'param2', offset: 4, type: 'float' },
+    { name: 'param3', offset: 8, type: 'float' },
+    { name: 'param4', offset: 12, type: 'float' },
+    { name: 'x', offset: 16, type: 'int32' },
+    { name: 'y', offset: 20, type: 'int32' },
+    { name: 'z', offset: 24, type: 'float' },
+    { name: 'seq', offset: 28, type: 'uint16' },
+    { name: 'command', offset: 30, type: 'uint16' },
+    { name: 'targetSystem', offset: 32, type: 'uint8' },
+    { name: 'targetComponent', offset: 33, type: 'uint8' },
+    { name: 'frame', offset: 34, type: 'uint8' },
+    { name: 'current', offset: 35, type: 'uint8' },
+    { name: 'autocontinue', offset: 36, type: 'uint8' },
+  ],
+}
+
+/** Registry keyed by MSG_ID, for the incoming-frame decoder. */
+export const MESSAGE_REGISTRY: Record<number, MessageDef> = Object.fromEntries(
+  [
+    HEARTBEAT,
+    GPS_RAW_INT,
+    ATTITUDE,
+    GLOBAL_POSITION_INT,
+    MISSION_REQUEST,
+    MISSION_REQUEST_LIST,
+    MISSION_COUNT,
+    MISSION_ITEM_REACHED,
+    MISSION_ACK,
+    MISSION_REQUEST_INT,
+    MISSION_ITEM_INT,
+  ].map((def) => [def.id, def]),
+)
+
+// MAV_FRAME (only the one we use — global position, relative altitude).
+export const MAV_FRAME_GLOBAL_RELATIVE_ALT_INT = 3
+
+// MAV_CMD (only the one we use — a plain navigation waypoint).
+export const MAV_CMD_NAV_WAYPOINT = 16
+
+// MAV_MISSION_RESULT (only the ones the UI distinguishes).
+export const MAV_MISSION_ACCEPTED = 0
+
+// MAV_TYPE / MAV_AUTOPILOT / MAV_STATE — used for the heartbeat we (the GCS) send.
+export const MAV_TYPE_GCS = 6
+export const MAV_AUTOPILOT_INVALID = 8
+export const MAV_STATE_ACTIVE = 4
+
+// GPS_FIX_TYPE (GPS_RAW_INT.fix_type) — used to render a human-readable fix label.
+export const GPS_FIX_TYPE_LABELS: Record<number, string> = {
+  0: 'no GPS',
+  1: 'no fix',
+  2: '2D fix',
+  3: '3D fix',
+  4: 'DGPS',
+  5: 'RTK float',
+  6: 'RTK fixed',
+  8: 'static',
+}

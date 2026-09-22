@@ -4,6 +4,7 @@ import { FieldMap, type CorrectionTarget, type DrawTarget } from '@/components/m
 import { ImportPanel } from '@/components/panels/ImportPanel'
 import { PanelPlaceholder } from '@/components/panels/PanelPlaceholder'
 import { PlanPanel } from '@/components/panels/PlanPanel'
+import { SendPanel } from '@/components/panels/SendPanel'
 import { VerifyPanel } from '@/components/panels/VerifyPanel'
 import { createBoundary } from '@/lib/geo/boundary'
 import { headingDegBetween } from '@/lib/geo/projection'
@@ -84,13 +85,7 @@ function App() {
               nextUp="Replay/simulator"
             />
           )}
-          {currentStep === 'send' && (
-            <PanelPlaceholder
-              title="Send to vehicle"
-              description="Export mission files, or upload live to a connected Pixhawk over Web Serial."
-              nextUp="VehicleLink + WebSerialVehicle, exports"
-            />
-          )}
+          {currentStep === 'send' && <SendPanel />}
         </aside>
 
         <div className="flex-1 min-w-0">

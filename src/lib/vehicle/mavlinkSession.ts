@@ -1,0 +1,311 @@
+/**
+ * The MAVLink session logic — heartbeat handling, telemetry decoding,
+ * and the mission upload/download handshake — factored out from
+ * WebSerialVehicle so it can be driven by any byte transport. In the
+ * browser that transport is a real Web Serial port; in
+ * mavlinkSession.test.ts it's an in-memory loopback that plays a
+ * simulated vehicle, which is what makes the mission-protocol state
+ * machine below testable without real hardware. WebSerialVehicle is a
+ * thin adapter that only knows how to open a serial port and pipe bytes
+ * in and out of this class — see its file for what's still
+ * hardware-only and unverified.
+ */
+import { encodeFrame, MavlinkFrameReader, type DecodedFrame } from './mavlink/codec'
+import {
+  ATTITUDE,
+  GLOBAL_POSITION_INT,
+  GPS_RAW_INT,
+  HEARTBEAT,
+  MAV_AUTOPILOT_INVALID,
+  MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+  MAV_MISSION_ACCEPTED,
+  MAV_STATE_ACTIVE,
+  MAV_TYPE_GCS,
+  MISSION_ACK,
+  MISSION_COUNT,
+  MISSION_ITEM_INT,
+  MISSION_REQUEST,
+  MISSION_REQUEST_INT,
+  MISSION_REQUEST_LIST,
+} from './mavlink/messages'
+import type { MissionUploadResult, MissionWaypoint, VehicleLinkEvents, VehicleTelemetry } from './types'
+import { EMPTY_TELEMETRY } from './types'
+
+// Our (the GCS's) own MAVLink identity. 255 is the conventional GCS
+// system id; component id 190 (MAV_COMP_ID_MISSIONPLANNER-ish range) is
+// an arbitrary-but-conventional choice for a ground-station-like tool.
+export const GCS_SYSID = 255
+export const GCS_COMPID = 190
+
+export const HEARTBEAT_STALE_MS = 5000
+export const MISSION_STEP_TIMEOUT_MS = 3000
+const POSITION_TOLERANCE_DEG = 1e-5 // ~1m at the equator — generous enough for int32 round-trip + firmware rounding
+
+function fixTypeLabel(value: number): VehicleTelemetry['gps']['fixType'] {
+  switch (value) {
+    case 0:
+      return 'no-gps'
+    case 1:
+      return 'no-fix'
+    case 2:
+      return '2d'
+    case 3:
+      return '3d'
+    case 4:
+      return 'dgps'
+    case 5:
+      return 'rtk-float'
+    case 6:
+      return 'rtk-fixed'
+    case 8:
+      return 'static'
+    default:
+      return 'unknown'
+  }
+}
+
+interface FrameWaiter {
+  predicate: (frame: DecodedFrame) => boolean
+  resolve: (frame: DecodedFrame) => void
+}
+
+export class MavlinkSession {
+  private frameReader = new MavlinkFrameReader()
+  private seq = 0
+  private telemetry: VehicleTelemetry = EMPTY_TELEMETRY
+  private lastHeartbeatAt: number | null = null
+  private vehicleSysId = 1
+  private vehicleCompId = 1
+  private frameWaiters: FrameWaiter[] = []
+
+  private telemetryListeners = new Set<VehicleLinkEvents['onTelemetry']>()
+  private logListeners = new Set<VehicleLinkEvents['onLog']>()
+
+  private readonly write: (bytes: Uint8Array) => Promise<void>
+
+  constructor(write: (bytes: Uint8Array) => Promise<void>) {
+    this.write = write
+  }
+
+  getTelemetry(): VehicleTelemetry {
+    return this.telemetry
+  }
+  getVehicleIdentity(): { sysid: number; compid: number } {
+    return { sysid: this.vehicleSysId, compid: this.vehicleCompId }
+  }
+
+  onTelemetry(listener: VehicleLinkEvents['onTelemetry']): () => void {
+    this.telemetryListeners.add(listener)
+    return () => this.telemetryListeners.delete(listener)
+  }
+  onLog(listener: VehicleLinkEvents['onLog']): () => void {
+    this.logListeners.add(listener)
+    return () => this.logListeners.delete(listener)
+  }
+  private log(message: string) {
+    for (const l of this.logListeners) l(message)
+  }
+  private emitTelemetry() {
+    for (const l of this.telemetryListeners) l(this.telemetry)
+  }
+
+  /** Feed newly-arrived bytes from whatever transport owns this session. */
+  feedBytes(bytes: Uint8Array): void {
+    for (const frame of this.frameReader.push(bytes)) this.handleFrame(frame)
+  }
+
+  private handleFrame(frame: DecodedFrame) {
+    if (frame.msgId === HEARTBEAT.id) {
+      this.lastHeartbeatAt = Date.now()
+      this.vehicleSysId = frame.sysid
+      this.vehicleCompId = frame.compid
+      this.telemetry = { ...this.telemetry, heartbeatOk: true, heartbeatAgeMs: 0 }
+      this.emitTelemetry()
+    } else if (frame.msgId === GPS_RAW_INT.id) {
+      const f = frame.fields
+      this.telemetry = {
+        ...this.telemetry,
+        gps: {
+          fixType: fixTypeLabel(f.fixType),
+          satellites: f.satellitesVisible,
+          // eph is documented (MAVLink common.xml) as HDOP scaled x100; UINT16_MAX means "unknown".
+          hdop: f.eph === 65535 ? null : f.eph / 100,
+          position: f.fixType >= 2 ? { lat: f.lat / 1e7, lon: f.lon / 1e7 } : null,
+        },
+      }
+      this.emitTelemetry()
+    } else if (frame.msgId === ATTITUDE.id) {
+      const f = frame.fields
+      const toDeg = (rad: number) => (rad * 180) / Math.PI
+      this.telemetry = {
+        ...this.telemetry,
+        attitude: { rollDeg: toDeg(f.roll), pitchDeg: toDeg(f.pitch), yawDeg: toDeg(f.yaw) },
+      }
+      this.emitTelemetry()
+    } else if (frame.msgId === GLOBAL_POSITION_INT.id) {
+      // Fused EKF position — not surfaced yet; GPS_RAW_INT drives the
+      // primary position shown in the UI since it stays available on a
+      // bench test even before the EKF fully settles.
+      void frame
+    }
+
+    const idx = this.frameWaiters.findIndex((w) => w.predicate(frame))
+    if (idx >= 0) {
+      const [waiter] = this.frameWaiters.splice(idx, 1)
+      waiter.resolve(frame)
+    }
+  }
+
+  /** Call on a steady timer from the owning transport — refreshes heartbeat staleness and (re)sends our own GCS heartbeat. */
+  async tick(): Promise<void> {
+    try {
+      await this.send(HEARTBEAT, {
+        customMode: 0,
+        type: MAV_TYPE_GCS,
+        autopilot: MAV_AUTOPILOT_INVALID,
+        baseMode: 0,
+        systemStatus: MAV_STATE_ACTIVE,
+        mavlinkVersion: 3,
+      })
+    } catch {
+      /* transient write failure — the next tick retries */
+    }
+    if (this.lastHeartbeatAt !== null) {
+      const age = Date.now() - this.lastHeartbeatAt
+      const heartbeatOk = age < HEARTBEAT_STALE_MS
+      if (heartbeatOk !== this.telemetry.heartbeatOk || age !== this.telemetry.heartbeatAgeMs) {
+        this.telemetry = { ...this.telemetry, heartbeatOk, heartbeatAgeMs: age }
+        this.emitTelemetry()
+      }
+    }
+  }
+
+  waitForHeartbeat(timeoutMs: number): Promise<DecodedFrame> {
+    return this.waitForFrame((f) => f.msgId === HEARTBEAT.id, timeoutMs)
+  }
+
+  /** Rejects every pending waiter — call when the transport is torn down, so nothing hangs forever. */
+  cancelAllWaits(reason: string): void {
+    for (const waiter of this.frameWaiters.splice(0)) {
+      void waiter // waiters reject themselves via their own timeout; this just drops references
+      this.log(`Cancelled a pending wait: ${reason}`)
+    }
+  }
+
+  private waitForFrame(predicate: (frame: DecodedFrame) => boolean, timeoutMs: number): Promise<DecodedFrame> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.frameWaiters = this.frameWaiters.filter((w) => w !== waiter)
+        reject(new Error('Timed out waiting for a response from the vehicle.'))
+      }, timeoutMs)
+      const waiter: FrameWaiter = {
+        predicate,
+        resolve: (frame) => {
+          clearTimeout(timer)
+          resolve(frame)
+        },
+      }
+      this.frameWaiters.push(waiter)
+    })
+  }
+
+  private async send(def: Parameters<typeof encodeFrame>[0], values: Record<string, number>): Promise<void> {
+    const frame = encodeFrame(def, values, { sysid: GCS_SYSID, compid: GCS_COMPID, seq: this.seq++ & 0xff })
+    await this.write(frame)
+  }
+
+  /**
+   * The standard MAVLink mission upload handshake: send MISSION_COUNT,
+   * then answer each MISSION_REQUEST_INT (or legacy MISSION_REQUEST) the
+   * vehicle sends back with the matching MISSION_ITEM_INT, until a
+   * MISSION_ACK closes the transaction.
+   */
+  private async uploadMission(waypoints: MissionWaypoint[]): Promise<void> {
+    await this.send(MISSION_COUNT, {
+      count: waypoints.length,
+      targetSystem: this.vehicleSysId,
+      targetComponent: this.vehicleCompId,
+    })
+
+    let remaining = waypoints.length
+    while (remaining > 0) {
+      const request = await this.waitForFrame(
+        (f) => f.msgId === MISSION_REQUEST_INT.id || f.msgId === MISSION_REQUEST.id,
+        MISSION_STEP_TIMEOUT_MS,
+      )
+      const seq = request.fields.seq
+      const wp = waypoints[seq]
+      if (!wp) throw new Error(`Vehicle requested unknown mission item seq ${seq}.`)
+
+      await this.send(MISSION_ITEM_INT, {
+        seq: wp.seq,
+        command: wp.command,
+        targetSystem: this.vehicleSysId,
+        targetComponent: this.vehicleCompId,
+        frame: MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        current: 0,
+        autocontinue: 1,
+        param1: 0,
+        param2: 0,
+        param3: 0,
+        param4: 0,
+        x: Math.round(wp.position.lat * 1e7),
+        y: Math.round(wp.position.lon * 1e7),
+        z: wp.altM,
+      })
+      remaining--
+    }
+
+    const ack = await this.waitForFrame((f) => f.msgId === MISSION_ACK.id, MISSION_STEP_TIMEOUT_MS)
+    if (ack.fields.type !== MAV_MISSION_ACCEPTED) {
+      throw new Error(`Vehicle rejected the mission (MAV_MISSION_RESULT ${ack.fields.type}).`)
+    }
+  }
+
+  /** Downloads the mission currently on the vehicle — used to verify an upload actually took. */
+  private async downloadMission(): Promise<MissionWaypoint[]> {
+    await this.send(MISSION_REQUEST_LIST, { targetSystem: this.vehicleSysId, targetComponent: this.vehicleCompId })
+    const countFrame = await this.waitForFrame((f) => f.msgId === MISSION_COUNT.id, MISSION_STEP_TIMEOUT_MS)
+    const count = countFrame.fields.count
+
+    const items: MissionWaypoint[] = []
+    for (let seq = 0; seq < count; seq++) {
+      await this.send(MISSION_REQUEST_INT, { seq, targetSystem: this.vehicleSysId, targetComponent: this.vehicleCompId })
+      const itemFrame = await this.waitForFrame((f) => f.msgId === MISSION_ITEM_INT.id && f.fields.seq === seq, MISSION_STEP_TIMEOUT_MS)
+      const f = itemFrame.fields
+      items.push({ seq: f.seq, command: f.command, altM: f.z, position: { lat: f.x / 1e7, lon: f.y / 1e7 } })
+    }
+
+    await this.send(MISSION_ACK, { targetSystem: this.vehicleSysId, targetComponent: this.vehicleCompId, type: MAV_MISSION_ACCEPTED })
+    return items
+  }
+
+  async uploadAndVerifyMission(waypoints: MissionWaypoint[]): Promise<MissionUploadResult> {
+    await this.uploadMission(waypoints)
+    const readBack = await this.downloadMission()
+
+    const mismatches: MissionUploadResult['mismatches'] = []
+    if (readBack.length !== waypoints.length) {
+      mismatches.push({ seq: -1, reason: `Uploaded ${waypoints.length} waypoints but read back ${readBack.length}.` })
+    }
+    for (const wp of waypoints) {
+      const match = readBack.find((r) => r.seq === wp.seq)
+      if (!match) {
+        mismatches.push({ seq: wp.seq, reason: 'Missing from read-back.' })
+        continue
+      }
+      const latOff = Math.abs(match.position.lat - wp.position.lat)
+      const lonOff = Math.abs(match.position.lon - wp.position.lon)
+      if (latOff > POSITION_TOLERANCE_DEG || lonOff > POSITION_TOLERANCE_DEG) {
+        mismatches.push({ seq: wp.seq, reason: `Position off by (${latOff.toExponential(2)}, ${lonOff.toExponential(2)}) deg.` })
+      }
+    }
+
+    return {
+      uploadedCount: waypoints.length,
+      readBack,
+      verified: mismatches.length === 0,
+      mismatches,
+    }
+  }
+}

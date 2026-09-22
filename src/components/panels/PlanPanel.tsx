@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { DroneProfilePicker } from '@/components/panels/DroneProfilePicker'
 import { Button } from '@/components/ui/Button'
 import { StatCard } from '@/components/ui/StatCard'
 import { useFieldStore } from '@/store/useFieldStore'
@@ -12,6 +13,7 @@ interface PlanPanelProps {
 export function PlanPanel({ cropRowTapActive, onStartCropRowTap, onCancelCropRowTap }: PlanPanelProps) {
   const boundary = useFieldStore((s) => s.boundary)
   const sprayPlan = useFieldStore((s) => s.sprayPlan)
+  const planError = useFieldStore((s) => s.planError)
   const droneProfile = useFieldStore((s) => s.droneProfile)
   const sweepStrategy = useFieldStore((s) => s.sweepStrategy)
   const setSweepStrategy = useFieldStore((s) => s.setSweepStrategy)
@@ -30,11 +32,11 @@ export function PlanPanel({ cropRowTapActive, onStartCropRowTap, onCancelCropRow
     }
   }, [sweepStrategy])
 
-  if (!boundary || !sprayPlan) {
+  if (!boundary) {
     return <div className="p-4 text-sm text-(--text-secondary)">No field loaded yet — go back to Import.</div>
   }
 
-  const sprayPassCount = sprayPlan.sorties.reduce((sum, s) => sum + s.passes.filter((p) => p.spraying).length, 0)
+  const sprayPassCount = sprayPlan ? sprayPlan.sorties.reduce((sum, s) => sum + s.passes.filter((p) => p.spraying).length, 0) : 0
   const isFixedOrCropRow = sweepStrategy.kind === 'fixed-heading' || sweepStrategy.kind === 'crop-row'
 
   return (
@@ -46,15 +48,25 @@ export function PlanPanel({ cropRowTapActive, onStartCropRowTap, onCancelCropRow
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2.5">
-        <StatCard label="Sorties" value={String(sprayPlan.sorties.length)} hint={`${droneProfile.tankL}L tank`} />
-        <StatCard label="Chemical" value={sprayPlan.totalVolumeL.toFixed(1)} unit="L" />
-        <StatCard label="Flight time" value={sprayPlan.totalEstimatedMinutes.toFixed(1)} unit="min" />
-        <StatCard label="Distance" value={(sprayPlan.totalDistanceM / 1000).toFixed(2)} unit="km" />
-        <StatCard label="Area" value={sprayPlan.areaHa.toFixed(2)} unit="ha" />
-        <StatCard label="Sweep heading" value={sprayPlan.headingDeg.toFixed(0)} unit="°" hint={`${sprayPassCount} passes`} />
-      </div>
+      {sprayPlan ? (
+        <div className="grid grid-cols-2 gap-2.5">
+          <StatCard label="Sorties" value={String(sprayPlan.sorties.length)} hint={`${droneProfile.tankL}L tank`} />
+          <StatCard label="Chemical" value={sprayPlan.totalVolumeL.toFixed(1)} unit="L" />
+          <StatCard label="Flight time" value={sprayPlan.totalEstimatedMinutes.toFixed(1)} unit="min" />
+          <StatCard label="Distance" value={(sprayPlan.totalDistanceM / 1000).toFixed(2)} unit="km" />
+          <StatCard label="Area" value={sprayPlan.areaHa.toFixed(2)} unit="ha" />
+          <StatCard label="Sweep heading" value={sprayPlan.headingDeg.toFixed(0)} unit="°" hint={`${sprayPassCount} passes`} />
+        </div>
+      ) : (
+        <div className="rounded-(--radius-card) border border-danger/30 bg-danger-bg p-3 text-sm text-danger">
+          Couldn't plan a spray path{planError ? ` — ${planError}` : '.'} Fix the drone profile below.
+        </div>
+      )}
       {lastRecomputeMs !== null && <div className="text-[11px] text-(--text-muted)">Re-planned in {lastRecomputeMs.toFixed(1)}ms</div>}
+
+      <div className="h-px bg-(--border-subtle)" />
+
+      <DroneProfilePicker />
 
       <div className="h-px bg-(--border-subtle)" />
 
@@ -107,7 +119,7 @@ export function PlanPanel({ cropRowTapActive, onStartCropRowTap, onCancelCropRow
       </section>
 
       <div className="mt-auto pt-2">
-        <Button variant="primary" className="w-full" onClick={() => setStep('simulate')}>
+        <Button variant="primary" className="w-full" disabled={!sprayPlan} onClick={() => setStep('simulate')}>
           Continue to Simulate
         </Button>
       </div>
