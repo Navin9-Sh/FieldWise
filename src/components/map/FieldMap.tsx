@@ -751,9 +751,29 @@ export function FieldMap({
     setData(map, SOURCE.walkTrace, walkTrace.length >= 2 ? latLngLineFeature(walkTrace) : EMPTY_FEATURE_COLLECTION)
   }, [correctionTarget, pilotPosition, accuracyM, walkTrace, loaded])
 
+  const showGetStarted = !boundary && !simulateOverlay && !drawTarget && liveWalkPath.length === 0
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
+
+      {showGetStarted && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="pointer-events-none max-w-xs rounded-(--radius-card) border border-(--border-subtle) bg-(--surface-panel)/95 px-5 py-4 text-center shadow-(--shadow-panel) backdrop-blur-sm">
+            <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-brand-50 text-brand-600">
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
+                <path d="M12 21s-7-6.1-7-11a7 7 0 1 1 14 0c0 4.9-7 11-7 11Z" stroke="currentColor" strokeWidth="1.75" />
+                <circle cx="12" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.75" />
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-(--text-primary)">No field loaded yet</p>
+            <p className="mt-1 text-xs text-(--text-secondary)">
+              Load the sample field, trace a boundary on the map, walk it with GPS, or import a file — all from the
+              panel on the left.
+            </p>
+          </div>
+        </div>
+      )}
 
       {drawTarget && (
         <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-(--radius-card) border border-(--border-subtle) bg-(--surface-panel) px-4 py-2.5 shadow-(--shadow-panel)">

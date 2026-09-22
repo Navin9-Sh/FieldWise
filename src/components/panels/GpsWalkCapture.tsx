@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/Button'
+import { Spinner } from '@/components/ui/Spinner'
 import { SAMPLE_FIELD_VERTICES } from '@/lib/geo/sampleField'
 import type { LatLng } from '@/lib/geo/types'
 
@@ -123,11 +124,21 @@ export function GpsWalkCapture({ onComplete, onCancel, onPointsChange }: GpsWalk
     )
   }
 
+  const waitingForFirstFix = mode === 'real' && points.length === 0 && !error
+
   return (
     <div className="space-y-2 rounded-(--radius-card) border border-provenance-walked/30 bg-provenance-walked-bg p-3">
-      <p className="text-xs font-medium text-provenance-walked">
-        {mode === 'real' ? 'Recording real GPS walk…' : 'Playing simulated walk…'} {points.length} point
-        {points.length === 1 ? '' : 's'} captured
+      <p className="flex items-center gap-1.5 text-xs font-medium text-provenance-walked">
+        {waitingForFirstFix ? (
+          <>
+            <Spinner /> Waiting for GPS fix…
+          </>
+        ) : (
+          <>
+            {mode === 'real' ? 'Recording real GPS walk…' : 'Playing simulated walk…'} {points.length} point
+            {points.length === 1 ? '' : 's'} captured
+          </>
+        )}
       </p>
       <div className="flex gap-2">
         <Button size="sm" variant="secondary" onClick={cancel}>

@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
+import { Spinner } from '@/components/ui/Spinner'
 import { StatCard } from '@/components/ui/StatCard'
 import { sprayPlanToWaypoints } from '@/lib/vehicle/missionFromPlan'
 import type { ConnectionState, MissionUploadResult, VehicleTelemetry } from '@/lib/vehicle/types'
@@ -116,7 +117,8 @@ export function SendPanel() {
       )}
 
       <div className="flex items-center justify-between rounded-(--radius-card) border border-(--border-subtle) bg-(--surface-panel) p-3">
-        <span className={clsx('rounded-full px-2.5 py-1 text-xs font-medium', STATE_CLASSES[connectionState])}>
+        <span className={clsx('flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium', STATE_CLASSES[connectionState])}>
+          {connectionState === 'connecting' && <Spinner />}
           {STATE_LABEL[connectionState]}
         </span>
         {connectionState === 'connected' ? (
@@ -178,6 +180,7 @@ export function SendPanel() {
           waypoints, then downloads them back to verify the upload took.
         </p>
         <Button variant="primary" disabled={connectionState !== 'connected' || uploading} onClick={handleUpload}>
+          {uploading && <Spinner className="text-white" />}
           {uploading ? 'Uploading…' : 'Upload mission'}
         </Button>
 
