@@ -213,6 +213,72 @@ describe('applyWalkedEdgeCorrection', () => {
       expect(() => applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)).toThrow(DeltaError)
     })
   })
+
+  describe('plausibility guard (straying far from the edge being corrected)', () => {
+    it('rejects a trace that starts near the edge, wanders deep into the interior with a sharp turn, and ends near a different part of the boundary', () => {
+      // Reproduces the exact reported bug: a trace that goes from near
+      // the target (bottom) edge, straight up into the middle of the
+      // 100x100m field (70m off the edge's own line — deep interior,
+      // nowhere near "correcting this edge"), a sharp turn, then back
+      // down past the boundary on the far side. This is NOT
+      // self-intersecting (it's a simple zigzag, so turf's kinks() alone
+      // wouldn't catch it) but is wildly implausible as a single-edge
+      // correction, which is exactly what this guard is for.
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+
+      const walked = toLatLng([
+        { x: -30, y: -48 }, // starts close to the edge, plausible
+        { x: -10, y: 20 }, // sharp turn deep into the interior — 70m off the edge's line
+        { x: 40, y: -60 }, // ends past the boundary, near a different part of it
+      ])
+
+      expect(() => applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)).toThrow(DeltaError)
+      expect(() => applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)).toThrow(/strays too far/)
+    })
+
+    it('does not reject a legitimate, substantial-but-local trim that stays within a sane fraction of the field', () => {
+      // A real correction can still move an edge by tens of meters — this
+      // shouldn't get caught by the same guard that rejects the wild
+      // interior excursion above. 25m off a 100m-square edge (well under
+      // the ~42m allowance for this field) is a big trim, not a redraw.
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+
+      const walked = toLatLng([
+        { x: -25, y: -25 },
+        { x: 25, y: -25 },
+      ])
+
+      expect(() => applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)).not.toThrow()
+    })
+
+    it('only touches the target edge — every untouched edge keeps its exact original geometry even when the correction is rejected or accepted', () => {
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+      const otherEdgesBefore = boundary.edges.filter((e) => e.id !== bottomEdge.id)
+
+      const walked = toLatLng([
+        { x: -25, y: -25 },
+        { x: 25, y: -25 },
+      ])
+      const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)
+
+      // Confirms the answer to "is the merge logic correctly scoped to
+      // just this edge" is yes: every OTHER edge's endpoints are
+      // identical (up to reindexing) to their original coordinates —
+      // nothing about the rest of the polygon moved.
+      for (const before of otherEdgesBefore) {
+        const after = updated.edges.find((e) => e.id === before.id)!
+        const beforeA = boundary.vertices[before.fromIndex]
+        const beforeB = boundary.vertices[before.toIndex]
+        const afterA = updated.vertices[after.fromIndex]
+        const afterB = updated.vertices[after.toIndex]
+        expect(afterA).toEqual(beforeA)
+        expect(afterB).toEqual(beforeB)
+      }
+    })
+  })
 })
 
 describe('acceptEdgeRisk', () => {

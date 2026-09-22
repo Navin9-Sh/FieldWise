@@ -7,7 +7,7 @@
  * edges" count meaningful instead of resetting on every edit.
  */
 import { kinks, polygon as turfPolygon } from '@turf/turf'
-import { simplifyPolyline } from './math'
+import { distancePointToSegment, simplifyPolyline } from './math'
 import type { LocalProjection } from './projection'
 import type { BoundaryEdge, FieldBoundary, LatLng, LocalPoint } from './types'
 
@@ -35,6 +35,45 @@ export class DeltaError extends Error {}
  */
 const MIN_SIMPLIFY_TOLERANCE_M = 2
 const SIMPLIFY_TOLERANCE_ACCURACY_MULTIPLIER = 1.5
+
+/**
+ * Plausibility bound on how far a walked trace may stray from the edge
+ * it's correcting, measured as perpendicular distance from that edge's
+ * original line segment.
+ *
+ * This catches a failure mode the self-intersection check below can't:
+ * a trace that wanders deep into the field's interior and back out past
+ * the far side of the boundary can easily be a perfectly *simple*
+ * (non-self-crossing) polygon — turf's kinks() has nothing to object to
+ * — while still being a wildly implausible "correction" for a single
+ * edge. Structurally the splice only ever touches the two vertices
+ * bordering the target edge (see applyWalkedEdgeCorrection below); nothing
+ * else about the boundary changes. But when the inserted chain is huge
+ * relative to the rest of the shape, the *result* reads as "the whole
+ * field got replaced" even though only one edge's geometry actually did
+ * — which is exactly what this guard exists to refuse before it happens,
+ * rather than after.
+ *
+ * Scaled to the boundary's own bounding-box diagonal (not a fixed
+ * distance, and not the target edge's own length — a short edge on a
+ * large field shouldn't get a tiny allowance, nor a long edge a huge
+ * one) so it stays sensible whether the field is a small plot or
+ * hundreds of hectares.
+ *
+ * Calibrated against this project's own reference for "a real
+ * correction": the Blind vs. Sighted demo scenario's satellite-vs-true
+ * boundary offsets (lib/simulation/blindVsSightedScenario.ts) top out
+ * around 20m on a ~250m-scale field — a season-out-of-date satellite
+ * trace still isn't off by more than roughly a tenth of the field's own
+ * size. 0.2 leaves headroom above that reference while still catching
+ * an into-the-interior-and-out-the-other-side excursion: on the sample
+ * field (~336m diagonal), the first version of this guard (0.3, ~101m
+ * cap) let an 84m real-world spike straight through — visibly wrong on
+ * screen, but numerically under the old threshold. 0.2 (~67m cap on
+ * that same field) catches it.
+ */
+const MAX_DEVIATION_FRACTION_OF_DIAGONAL = 0.2
+const MIN_MAX_DEVIATION_M = 15
 
 /**
  * Replaces one edge's geometry with a walked trace, splicing the trace's
@@ -91,7 +130,38 @@ export function applyWalkedEdgeCorrection(
     )
   }
 
-  const vertices = verticesLocal.map((p) => projection.toLatLng(p))
+  // Second guard, independent of the one above: a trace that wanders far
+  // from the edge it's meant to be correcting can be perfectly *simple*
+  // (no self-intersection at all — a deep spike into the interior and
+  // back out is topologically fine) while still being an implausible
+  // correction for one edge. See MAX_DEVIATION_FRACTION_OF_DIAGONAL's
+  // comment for why this is checked separately from — and in addition
+  // to — self-intersection.
+  const edgeALocal = projection.toLocal(boundary.vertices[target.fromIndex])
+  const edgeBLocal = projection.toLocal(boundary.vertices[target.toIndex])
+  const maxDeviationM = Math.max(
+    MIN_MAX_DEVIATION_M,
+    boundingDiagonalM(boundary.vertices.map((v) => projection.toLocal(v))) * MAX_DEVIATION_FRACTION_OF_DIAGONAL,
+  )
+  const strayingPoint = simplifiedLocal.find((p) => distancePointToSegment(p, edgeALocal, edgeBLocal) > maxDeviationM)
+  if (strayingPoint) {
+    throw new DeltaError(
+      `That walked trace strays too far from the edge you're correcting (over ${Math.round(maxDeviationM)}m from it) — it looks like it wandered into the middle of the field rather than following this edge. Walk a path that stays close to the edge being corrected, or cancel and re-select if you meant to redraw more of the boundary.`,
+    )
+  }
+
+  // Built from the ORIGINAL (untouched) LatLng vertices directly, not by
+  // round-tripping the whole ring through local space and back — the
+  // AEQD projection isn't bit-for-bit invertible, and verticesLocal
+  // above exists only for the two validity checks. Every vertex this
+  // correction didn't touch must come back as the exact same value it
+  // started as, matching this file's own "untouched means untouched"
+  // guarantee (see the header comment) — not just numerically close.
+  const vertices: LatLng[] = [
+    ...boundary.vertices.slice(0, insertAfter + 1),
+    ...simplifiedLocal.map((p) => projection.toLatLng(p)),
+    ...boundary.vertices.slice(insertAfter + 1),
+  ]
 
   const verifiedAt = new Date().toISOString()
   const edges: BoundaryEdge[] = []
@@ -137,6 +207,15 @@ function isSelfIntersecting(ring: LocalPoint[]): boolean {
   const coords: [number, number][] = ring.map((p) => [p.x, p.y])
   coords.push(coords[0])
   return kinks(turfPolygon([coords])).features.length > 0
+}
+
+/** The straight-line distance across a set of points' bounding box — the reference scale for MAX_DEVIATION_FRACTION_OF_DIAGONAL above. */
+function boundingDiagonalM(points: LocalPoint[]): number {
+  const xs = points.map((p) => p.x)
+  const ys = points.map((p) => p.y)
+  const width = Math.max(...xs) - Math.min(...xs)
+  const height = Math.max(...ys) - Math.min(...ys)
+  return Math.hypot(width, height)
 }
 
 /**
