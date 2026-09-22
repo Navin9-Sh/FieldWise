@@ -59,30 +59,32 @@ function App() {
   return (
     <AppShell>
       <div className="flex flex-1 min-h-0">
-        <aside className="w-[380px] shrink-0 border-r border-(--border-subtle) bg-(--surface-app)">
-          {currentStep === 'import' && (
-            <ImportPanel
-              drawTarget={drawTarget}
-              onStartDrawBoundary={() => setDrawTarget('boundary')}
-              onStartDrawZone={() => setDrawTarget('zone')}
-              onCancelDraw={() => setDrawTarget(null)}
-              onGpsWalkPointsChange={setLiveWalkPath}
-            />
-          )}
-          {currentStep === 'verify' && (
-            <VerifyPanel
-              correctionTarget={correctionTarget}
-              onStartWalkStrip={(edgeId) => setCorrectionTarget({ mode: 'walk-strip', edgeId })}
-              onStartTrimEdge={(edgeId) => setCorrectionTarget({ mode: 'trim-edge', edgeId })}
-              onCancelCorrection={() => setCorrectionTarget(null)}
-            />
-          )}
-          {currentStep === 'plan' && (
-            <PlanPanel cropRowTapActive={cropRowTapActive} onStartCropRowTap={() => setCropRowTapActive(true)} onCancelCropRowTap={() => setCropRowTapActive(false)} />
-          )}
-          {currentStep === 'simulate' && <SimulatePanel onOverlayChange={setSimulateOverlay} />}
-          {currentStep === 'export' && <ExportPanel />}
-          {currentStep === 'send' && <SendPanel />}
+        <aside className="w-[380px] shrink-0 overflow-hidden border-r border-(--border-subtle) bg-(--surface-app)">
+          <div key={currentStep} className="panel-transition h-full">
+            {currentStep === 'import' && (
+              <ImportPanel
+                drawTarget={drawTarget}
+                onStartDrawBoundary={() => setDrawTarget('boundary')}
+                onStartDrawZone={() => setDrawTarget('zone')}
+                onCancelDraw={() => setDrawTarget(null)}
+                onGpsWalkPointsChange={setLiveWalkPath}
+              />
+            )}
+            {currentStep === 'verify' && (
+              <VerifyPanel
+                correctionTarget={correctionTarget}
+                onStartWalkStrip={(edgeId) => setCorrectionTarget({ mode: 'walk-strip', edgeId })}
+                onStartTrimEdge={(edgeId) => setCorrectionTarget({ mode: 'trim-edge', edgeId })}
+                onCancelCorrection={() => setCorrectionTarget(null)}
+              />
+            )}
+            {currentStep === 'plan' && (
+              <PlanPanel cropRowTapActive={cropRowTapActive} onStartCropRowTap={() => setCropRowTapActive(true)} onCancelCropRowTap={() => setCropRowTapActive(false)} />
+            )}
+            {currentStep === 'simulate' && <SimulatePanel onOverlayChange={setSimulateOverlay} />}
+            {currentStep === 'export' && <ExportPanel />}
+            {currentStep === 'send' && <SendPanel />}
+          </div>
         </aside>
 
         <div className="flex-1 min-w-0">

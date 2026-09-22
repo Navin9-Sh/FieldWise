@@ -110,3 +110,22 @@ body {
   display: flex;
   flex-direction: column;
 }
+
+/* Subtle step-change transition for the sidebar panels — applied via a
+   `key`-remounted wrapper in App.tsx, so switching steps reads as a
+   deliberate transition rather than an instant content swap. Small and
+   fast on purpose: this is wayfinding polish, not a loading screen. */
+@keyframes panel-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.panel-transition {
+  animation: panel-fade-in 180ms ease-out;
+}
