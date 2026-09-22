@@ -155,3 +155,29 @@ export function scanlineSpans(rings: LocalPoint[][], y: number): Array<[number, 
   }
   return spans
 }
+
+/**
+ * Even-odd point-in-polygon test, built on the same scanlineIntersections
+ * used by the planner — a single-point query is just "how many crossings
+ * fall to the left of this x", which is the same even-odd rule at one
+ * fixed y instead of iterated across many rows. Reusing it here (instead
+ * of a second, parallel ray-casting implementation) means the replay
+ * simulator's grid classification and the planner's row clipping can
+ * never quietly disagree about what "inside" means.
+ */
+export function pointInPolygon(point: LocalPoint, ring: LocalPoint[]): boolean {
+  const crossingsBeforeX = scanlineIntersections([ring], point.y).filter((x) => x < point.x).length
+  return crossingsBeforeX % 2 === 1
+}
+
+/** Shortest distance from a point to a line SEGMENT (not the infinite line) — the segment's endpoints clamp the closest point. */
+export function distancePointToSegment(p: LocalPoint, a: LocalPoint, b: LocalPoint): number {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const lengthSq = abx * abx + aby * aby
+  if (lengthSq === 0) return distance(p, a)
+
+  let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / lengthSq
+  t = Math.max(0, Math.min(1, t))
+  return distance(p, { x: a.x + t * abx, y: a.y + t * aby })
+}

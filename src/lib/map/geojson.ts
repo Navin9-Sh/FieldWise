@@ -7,6 +7,7 @@ import { circle } from '@turf/turf'
 import type { Feature, FeatureCollection, LineString, Point, Polygon } from 'geojson'
 import type { LocalProjection } from '@/lib/geo/projection'
 import type { FieldBoundary, LatLng, NoSprayZone, SprayPlan } from '@/lib/geo/types'
+import type { ReplayHeatmap } from '@/lib/simulation/replay'
 
 function ringCoords(vertices: LatLng[]): [number, number][] {
   const coords: [number, number][] = vertices.map((v) => [v.lon, v.lat])
@@ -19,6 +20,15 @@ export function boundaryToPolygonFeature(boundary: FieldBoundary): Feature<Polyg
     type: 'Feature',
     properties: { id: boundary.id },
     geometry: { type: 'Polygon', coordinates: [ringCoords(boundary.vertices)] },
+  }
+}
+
+/** A plain polygon outline from a vertex ring — for boundaries that aren't a full FieldBoundary (e.g. the Simulate panel's ground-truth/scenario polygons, which have no provenance/edges of their own). */
+export function polygonFeatureFromRing(vertices: LatLng[], properties: Record<string, unknown> = {}): Feature<Polygon> {
+  return {
+    type: 'Feature',
+    properties,
+    geometry: { type: 'Polygon', coordinates: [ringCoords(vertices)] },
   }
 }
 
@@ -126,4 +136,47 @@ export const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: 'FeatureColle
 /** A circle polygon around a point, radius in meters — used to render the simulated GPS accuracy ring while walking a correction. */
 export function accuracyCircleFeature(center: LatLng, radiusM: number): Feature<Polygon> {
   return circle([center.lon, center.lat], radiusM / 1000, { steps: 32, units: 'kilometers' }) as Feature<Polygon>
+}
+
+/**
+ * Renders the replay heatmap as one small square Polygon per cell (not
+ * points/circles) so adjacent covered cells visually merge into a solid
+ * painted area, the way a real dose heatmap reads. Only cells with
+ * doseOrder <= revealedThroughStep are included — this is what drives
+ * the progressive-reveal animation — except 'missed' cells (never
+ * dosed by any pass), which only appear once revealedThroughStep has
+ * reached the end of the pass sequence, so the story reads as "spraying
+ * happens, then whatever never got reached lights up red".
+ */
+export function heatmapToFeatureCollection(
+  heatmap: ReplayHeatmap,
+  projection: LocalProjection,
+  revealedThroughStep: number,
+): FeatureCollection<Polygon> {
+  const half = heatmap.cellSizeM / 2
+  const showMissed = revealedThroughStep >= heatmap.totalPasses - 1
+
+  const features: Feature<Polygon>[] = []
+  for (const cell of heatmap.cells) {
+    if (cell.state === 'missed') {
+      if (!showMissed) continue
+    } else if (cell.doseOrder === null || cell.doseOrder > revealedThroughStep) {
+      continue
+    }
+
+    const corners: LatLng[] = [
+      { lon: cell.cx - half, lat: cell.cy - half },
+      { lon: cell.cx + half, lat: cell.cy - half },
+      { lon: cell.cx + half, lat: cell.cy + half },
+      { lon: cell.cx - half, lat: cell.cy + half },
+    ].map((p) => projection.toLatLng({ x: p.lon, y: p.lat }))
+
+    features.push({
+      type: 'Feature',
+      properties: { state: cell.state },
+      geometry: { type: 'Polygon', coordinates: [ringCoords(corners)] },
+    })
+  }
+
+  return { type: 'FeatureCollection', features }
 }

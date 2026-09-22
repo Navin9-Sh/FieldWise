@@ -18,12 +18,15 @@ import {
   boundaryToPolygonFeature,
   boundsOfLatLng,
   EMPTY_FEATURE_COLLECTION,
+  heatmapToFeatureCollection,
   latLngLineFeature,
   latLngPointFeature,
+  polygonFeatureFromRing,
   sprayPlanToFeatureCollections,
   zonesToFeatureCollection,
 } from '@/lib/map/geojson'
 import { PROVENANCE_COLORS } from '@/lib/map/provenanceColors'
+import type { ReplayHeatmap } from '@/lib/simulation/replay'
 
 const SOURCE = {
   boundaryFill: 'boundary-fill',
@@ -37,6 +40,9 @@ const SOURCE = {
   walkTrace: 'walk-trace',
   pilotAccuracy: 'pilot-accuracy',
   pilotMarker: 'pilot-marker',
+  simGroundTruth: 'sim-ground-truth',
+  simActiveBoundary: 'sim-active-boundary',
+  heatmap: 'heatmap',
 } as const
 
 export type DrawTarget = 'boundary' | 'zone' | null
@@ -73,6 +79,27 @@ interface FieldMapProps {
   /** Tap-two-points-along-a-row correction. */
   cropRowTapActive: boolean
   onCropRowTap: (a: LatLng, b: LatLng) => void
+
+  /** Blind vs. Sighted replay: the scored boundary + heatmap for whichever run is currently being viewed. */
+  simulateOverlay: SimulateOverlay | null
+}
+
+export interface SimulateOverlay {
+  groundTruthLatLng: LatLng[]
+  activeBoundaryLatLng: LatLng[]
+  /** Hex — amber for the Blind (satellite) run, blue for the Sighted (corrected) run. */
+  activeColor: string
+  heatmap: ReplayHeatmap
+  /**
+   * The scenario's OWN local projection — the heatmap's cell coordinates
+   * are local meters relative to the scenario's own origin, which is a
+   * different place than wherever the live boundary (if any) is
+   * centered. Bundled here rather than reusing the outer `projection`
+   * prop so this never silently unprojects against the wrong origin.
+   */
+  projection: LocalProjection
+  /** Animation cursor: spraying passes with doseOrder <= this are revealed; 'missed' cells reveal once this reaches the end. */
+  revealedThroughStep: number
 }
 
 function setData(map: MapLibreMap, sourceId: string, data: GeoJSON.GeoJSON) {
@@ -127,6 +154,7 @@ export function FieldMap({
   onCorrectionCancel,
   cropRowTapActive,
   onCropRowTap,
+  simulateOverlay,
 }: FieldMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -420,6 +448,34 @@ export function FieldMap({
         },
       })
 
+      // Blind vs. Sighted replay: the heatmap (below) + the ground-truth
+      // and active-boundary outlines (above it), so judges can see both
+      // the score and exactly where each boundary sat relative to truth.
+      map.addSource(SOURCE.heatmap, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'heatmap-fill',
+        type: 'fill',
+        source: SOURCE.heatmap,
+        paint: {
+          'fill-color': ['match', ['get', 'state'], 'covered', '#16a34a', 'missed', '#dc2626', 'overspray', '#f97316', '#999999'],
+          'fill-opacity': 0.55,
+        },
+      })
+      map.addSource(SOURCE.simGroundTruth, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'sim-ground-truth-outline',
+        type: 'line',
+        source: SOURCE.simGroundTruth,
+        paint: { 'line-color': '#1a1d24', 'line-width': 2, 'line-dasharray': [3, 2] },
+      })
+      map.addSource(SOURCE.simActiveBoundary, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'sim-active-boundary-outline',
+        type: 'line',
+        source: SOURCE.simActiveBoundary,
+        paint: { 'line-color': ['get', 'color'], 'line-width': 3 },
+      })
+
       setLoaded(true)
       // Safety net: containers inside flex layouts sometimes report zero
       // size on first paint, before layout settles.
@@ -575,6 +631,37 @@ export function FieldMap({
       setData(map, SOURCE.homePoint, EMPTY_FEATURE_COLLECTION)
     }
   }, [sprayPlan, projection, boundary, loaded])
+
+  // Blind vs. Sighted replay overlay: ground truth + active boundary outlines, and the heatmap itself.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+
+    if (!simulateOverlay) {
+      setData(map, SOURCE.simGroundTruth, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.simActiveBoundary, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.heatmap, EMPTY_FEATURE_COLLECTION)
+      return
+    }
+
+    setData(map, SOURCE.simGroundTruth, polygonFeatureFromRing(simulateOverlay.groundTruthLatLng))
+    setData(
+      map,
+      SOURCE.simActiveBoundary,
+      polygonFeatureFromRing(simulateOverlay.activeBoundaryLatLng, { color: simulateOverlay.activeColor }),
+    )
+    setData(
+      map,
+      SOURCE.heatmap,
+      heatmapToFeatureCollection(simulateOverlay.heatmap, simulateOverlay.projection, simulateOverlay.revealedThroughStep),
+    )
+
+    if (lastFittedBoundaryId.current !== 'simulate-overlay') {
+      lastFittedBoundaryId.current = 'simulate-overlay'
+      const bounds = boundsOfLatLng([...simulateOverlay.groundTruthLatLng, ...simulateOverlay.activeBoundaryLatLng]) as LngLatBoundsLike
+      map.fitBounds(bounds, { padding: 64, duration: 600 })
+    }
+  }, [simulateOverlay, loaded])
 
   // Layer visibility toggles.
   useEffect(() => {

@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
-import { FieldMap, type CorrectionTarget, type DrawTarget } from '@/components/map/FieldMap'
+import { FieldMap, type CorrectionTarget, type DrawTarget, type SimulateOverlay } from '@/components/map/FieldMap'
 import { ImportPanel } from '@/components/panels/ImportPanel'
-import { PanelPlaceholder } from '@/components/panels/PanelPlaceholder'
 import { PlanPanel } from '@/components/panels/PlanPanel'
 import { SendPanel } from '@/components/panels/SendPanel'
+import { SimulatePanel } from '@/components/panels/SimulatePanel'
 import { VerifyPanel } from '@/components/panels/VerifyPanel'
 import { createBoundary } from '@/lib/geo/boundary'
 import { headingDegBetween } from '@/lib/geo/projection'
@@ -32,6 +32,7 @@ function App() {
   const [liveWalkPath, setLiveWalkPath] = useState<LatLng[]>([])
   const [correctionTarget, setCorrectionTarget] = useState<CorrectionTarget | null>(null)
   const [cropRowTapActive, setCropRowTapActive] = useState(false)
+  const [simulateOverlay, setSimulateOverlay] = useState<SimulateOverlay | null>(null)
 
   const handleDrawFinish = (vertices: LatLng[]) => {
     if (drawTarget === 'boundary') {
@@ -78,27 +79,21 @@ function App() {
           {currentStep === 'plan' && (
             <PlanPanel cropRowTapActive={cropRowTapActive} onStartCropRowTap={() => setCropRowTapActive(true)} onCancelCropRowTap={() => setCropRowTapActive(false)} />
           )}
-          {currentStep === 'simulate' && (
-            <PanelPlaceholder
-              title="Simulate"
-              description="Blind vs. Sighted replay against hidden ground truth — coverage, overspray, litres, cost."
-              nextUp="Replay/simulator"
-            />
-          )}
+          {currentStep === 'simulate' && <SimulatePanel onOverlayChange={setSimulateOverlay} />}
           {currentStep === 'send' && <SendPanel />}
         </aside>
 
         <div className="flex-1 min-w-0">
           <FieldMap
-            boundary={boundary}
+            boundary={currentStep === 'simulate' ? null : boundary}
             noSprayZones={noSprayZones}
-            sprayPlan={sprayPlan}
+            sprayPlan={currentStep === 'simulate' ? null : sprayPlan}
             projection={projection}
             selectedEdgeId={selectedEdgeId}
             onSelectEdge={setSelectedEdgeId}
             showEdges={currentStep === 'verify'}
-            showZones={currentStep !== 'send'}
-            showPlan={currentStep === 'plan' || currentStep === 'simulate' || currentStep === 'send'}
+            showZones={currentStep !== 'send' && currentStep !== 'simulate'}
+            showPlan={currentStep === 'plan' || currentStep === 'send'}
             drawTarget={drawTarget}
             onDrawFinish={handleDrawFinish}
             onDrawCancel={() => setDrawTarget(null)}
@@ -108,6 +103,7 @@ function App() {
             onCorrectionCancel={() => setCorrectionTarget(null)}
             cropRowTapActive={cropRowTapActive}
             onCropRowTap={handleCropRowTap}
+            simulateOverlay={simulateOverlay}
           />
         </div>
       </div>
