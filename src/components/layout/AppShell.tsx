@@ -23,6 +23,7 @@ export function AppShell({ children }: AppShellProps) {
     if (step === 'verify') return boundary !== null
     if (step === 'plan') return boundary !== null
     if (step === 'simulate') return sprayPlan !== null
+    if (step === 'export') return sprayPlan !== null
     if (step === 'send') return sprayPlan !== null
     return false
   })

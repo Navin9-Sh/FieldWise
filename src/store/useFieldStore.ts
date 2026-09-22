@@ -20,8 +20,8 @@ import type {
   SweepStrategy,
 } from '@/lib/geo/types'
 
-/** The five-step pilot workflow, matches the header stepper 1:1. */
-export const WORKFLOW_STEPS = ['import', 'verify', 'plan', 'simulate', 'send'] as const
+/** The six-step pilot workflow, matches the header stepper 1:1. */
+export const WORKFLOW_STEPS = ['import', 'verify', 'plan', 'simulate', 'export', 'send'] as const
 export type WorkflowStep = (typeof WORKFLOW_STEPS)[number]
 
 export const STEP_LABELS: Record<WorkflowStep, string> = {
@@ -29,6 +29,7 @@ export const STEP_LABELS: Record<WorkflowStep, string> = {
   verify: 'Verify',
   plan: 'Plan',
   simulate: 'Simulate',
+  export: 'Export',
   send: 'Send to Vehicle',
 }
 

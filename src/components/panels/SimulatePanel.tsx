@@ -76,8 +76,10 @@ export function SimulatePanel({ onOverlayChange }: SimulatePanelProps) {
       <div>
         <h2 className="text-sm font-semibold text-(--text-primary)">Blind vs. Sighted replay</h2>
         <p className="mt-1 text-xs text-(--text-secondary)">
-          A scripted before/after scenario — not a replay of your own session (the app doesn't keep the
-          pre-correction geometry once an edge is walked). Same ground truth, same drone profile, two plans.
+          A representative example, not a replay of your own session — this is a fixed, scripted scenario (the app
+          doesn't keep the pre-correction geometry once an edge is walked, so there's no honest way to replay your
+          own corrections here). Same ground truth, same drone profile, two plans, to illustrate the difference a
+          correction makes.
         </p>
       </div>
 

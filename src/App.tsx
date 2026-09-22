@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import { FieldMap, type CorrectionTarget, type DrawTarget, type SimulateOverlay } from '@/components/map/FieldMap'
+import { ExportPanel } from '@/components/panels/ExportPanel'
 import { ImportPanel } from '@/components/panels/ImportPanel'
 import { PlanPanel } from '@/components/panels/PlanPanel'
 import { SendPanel } from '@/components/panels/SendPanel'
@@ -80,6 +81,7 @@ function App() {
             <PlanPanel cropRowTapActive={cropRowTapActive} onStartCropRowTap={() => setCropRowTapActive(true)} onCancelCropRowTap={() => setCropRowTapActive(false)} />
           )}
           {currentStep === 'simulate' && <SimulatePanel onOverlayChange={setSimulateOverlay} />}
+          {currentStep === 'export' && <ExportPanel />}
           {currentStep === 'send' && <SendPanel />}
         </aside>
 
@@ -93,7 +95,7 @@ function App() {
             onSelectEdge={setSelectedEdgeId}
             showEdges={currentStep === 'verify'}
             showZones={currentStep !== 'send' && currentStep !== 'simulate'}
-            showPlan={currentStep === 'plan' || currentStep === 'send'}
+            showPlan={currentStep === 'plan' || currentStep === 'export' || currentStep === 'send'}
             drawTarget={drawTarget}
             onDrawFinish={handleDrawFinish}
             onDrawCancel={() => setDrawTarget(null)}
