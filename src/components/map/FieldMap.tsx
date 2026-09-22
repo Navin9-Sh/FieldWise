@@ -518,6 +518,25 @@ export function FieldMap({
     // position — the marker itself tracks the cursor exactly, but what
     // gets fed into the boundary correction is jittered within the
     // session's simulated GPS accuracy, same as a real fix would be.
+    //
+    // The trace must be 100% drag-controlled: it only extends while the
+    // mouse button is actually held down over the map, and stops the
+    // instant it's released — never auto-continuing on its own. MapLibre's
+    // own `mouseup` is scoped to the map canvas, so releasing the button
+    // outside it (trivially easy with the 380px sidebar right there) would
+    // never fire it, leaving isDraggingPilotRef stuck `true` and turning
+    // the next plain mouse-move-with-no-button-held into an unwanted trace
+    // extension. Two independent fixes for that one failure mode: a
+    // `buttons` check inside mousemove itself (self-healing — stops on
+    // the very next move regardless of where the release happened) and a
+    // window-level mouseup listener (so the cursor/grab state also resets
+    // correctly even when the release lands off-canvas).
+    const stopDraggingPilot = () => {
+      if (!isDraggingPilotRef.current) return
+      isDraggingPilotRef.current = false
+      map.getCanvas().style.cursor = correctionActiveRef.current ? 'grab' : ''
+    }
+
     map.on('mousedown', 'pilot-marker-hit', (e) => {
       if (!correctionActiveRef.current) return
       e.preventDefault()
@@ -532,6 +551,13 @@ export function FieldMap({
     })
     map.on('mousemove', (e: MapMouseEvent) => {
       if (!isDraggingPilotRef.current) return
+      if (e.originalEvent.buttons === 0) {
+        // The button isn't actually held anymore — the release must have
+        // happened outside the canvas. Stop here instead of treating this
+        // move as a continued drag.
+        stopDraggingPilot()
+        return
+      }
       const truePosition: LatLng = { lon: e.lngLat.lng, lat: e.lngLat.lat }
       setPilotPosition(truePosition)
 
@@ -557,13 +583,11 @@ export function FieldMap({
         return [...prev, recordedPoint]
       })
     })
-    map.on('mouseup', () => {
-      if (!isDraggingPilotRef.current) return
-      isDraggingPilotRef.current = false
-      map.getCanvas().style.cursor = correctionActiveRef.current ? 'grab' : ''
-    })
+    map.on('mouseup', stopDraggingPilot)
+    window.addEventListener('mouseup', stopDraggingPilot)
 
     return () => {
+      window.removeEventListener('mouseup', stopDraggingPilot)
       map.remove()
       mapRef.current = null
     }
