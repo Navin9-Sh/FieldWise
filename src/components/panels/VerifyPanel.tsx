@@ -1,16 +1,27 @@
 import clsx from 'clsx'
+import type { CorrectionTarget } from '@/components/map/FieldMap'
 import { Button } from '@/components/ui/Button'
 import { ProvenanceBadge } from '@/components/ui/ProvenanceBadge'
 import { distance } from '@/lib/geo/math'
 import { useFieldStore } from '@/store/useFieldStore'
 
-export function VerifyPanel() {
+interface VerifyPanelProps {
+  correctionTarget: CorrectionTarget | null
+  onStartWalkStrip: (edgeId: string) => void
+  onStartTrimEdge: (edgeId: string) => void
+  onCancelCorrection: () => void
+}
+
+export function VerifyPanel({ correctionTarget, onStartWalkStrip, onStartTrimEdge, onCancelCorrection }: VerifyPanelProps) {
   const boundary = useFieldStore((s) => s.boundary)
   const projection = useFieldStore((s) => s.projection)
   const readiness = useFieldStore((s) => s.readiness)
   const selectedEdgeId = useFieldStore((s) => s.selectedEdgeId)
   const setSelectedEdgeId = useFieldStore((s) => s.setSelectedEdgeId)
   const setStep = useFieldStore((s) => s.setStep)
+  const acceptRisk = useFieldStore((s) => s.acceptRisk)
+  const revokeRisk = useFieldStore((s) => s.revokeRisk)
+  const lastRecomputeMs = useFieldStore((s) => s.lastRecomputeMs)
 
   if (!boundary || !readiness) {
     return (
@@ -21,6 +32,7 @@ export function VerifyPanel() {
   }
 
   const selectedEdge = boundary.edges.find((e) => e.id === selectedEdgeId) ?? null
+  const correctionActiveHere = correctionTarget !== null
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -45,7 +57,11 @@ export function VerifyPanel() {
           <div className="mt-1 text-xs text-warning">
             {readiness.unverifiedEdges} of {readiness.totalEdges} edges unverified ·{' '}
             {Math.round(readiness.unverifiedLengthM)}m of boundary unchecked
+            {readiness.acceptedRiskEdges > 0 && ` · ${readiness.acceptedRiskEdges} accepted`}
           </div>
+        )}
+        {lastRecomputeMs !== null && (
+          <div className="mt-1 text-[11px] text-(--text-muted)">Re-planned in {lastRecomputeMs.toFixed(1)}ms</div>
         )}
       </div>
 
@@ -65,9 +81,10 @@ export function VerifyPanel() {
               <li key={edge.id}>
                 <button
                   type="button"
+                  disabled={correctionActiveHere}
                   onClick={() => setSelectedEdgeId(isSelected ? null : edge.id)}
                   className={clsx(
-                    'flex w-full items-center justify-between rounded-(--radius-control) border px-2.5 py-2 text-left text-sm transition-colors',
+                    'flex w-full items-center justify-between rounded-(--radius-control) border px-2.5 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                     isSelected
                       ? 'border-brand-400 bg-brand-50'
                       : 'border-(--border-subtle) bg-(--surface-panel) hover:bg-(--surface-panel-raised)',
@@ -78,7 +95,7 @@ export function VerifyPanel() {
                     {lengthM !== null && <span className="tabular-nums text-(--text-secondary)">{Math.round(lengthM)}m</span>}
                     {isBlocking && <span className="h-1.5 w-1.5 rounded-full bg-warning" title="Blocking clearance" />}
                   </span>
-                  <ProvenanceBadge kind={edge.provenance.kind} />
+                  <ProvenanceBadge kind={edge.provenance.kind} acceptedRisk={edge.provenance.acceptedRisk} />
                 </button>
               </li>
             )
@@ -86,26 +103,53 @@ export function VerifyPanel() {
         </ul>
       </section>
 
-      {selectedEdge && (
-        <section className="space-y-1.5 rounded-(--radius-card) border border-brand-200 bg-brand-50 p-3">
+      {correctionActiveHere && (
+        <section className="space-y-2 rounded-(--radius-card) border border-provenance-walked/30 bg-provenance-walked-bg p-3">
+          <p className="text-xs font-medium text-provenance-walked">
+            Drag the pilot marker on the map to {correctionTarget?.mode === 'walk-strip' ? 'walk the new strip' : 'walk the true edge'}, then Finish.
+          </p>
+          <Button size="sm" variant="secondary" onClick={onCancelCorrection}>
+            Cancel correction
+          </Button>
+        </section>
+      )}
+
+      {selectedEdge && !correctionActiveHere && (
+        <section className="space-y-2 rounded-(--radius-card) border border-brand-200 bg-brand-50 p-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-700">Selected edge</h3>
           <div className="text-sm text-(--text-primary)">
-            {selectedEdge.id} — <ProvenanceBadge kind={selectedEdge.provenance.kind} className="ml-1" />
+            {selectedEdge.id} — <ProvenanceBadge kind={selectedEdge.provenance.kind} acceptedRisk={selectedEdge.provenance.acceptedRisk} className="ml-1" />
           </div>
           {selectedEdge.provenance.kind === 'satellite' && selectedEdge.provenance.imageryDate && (
             <div className="text-xs text-(--text-secondary)">Imagery date: {selectedEdge.provenance.imageryDate}</div>
           )}
           {selectedEdge.provenance.kind === 'walked' && selectedEdge.provenance.accuracyM !== undefined && (
-            <div className="text-xs text-(--text-secondary)">GPS accuracy: ±{selectedEdge.provenance.accuracyM}m</div>
+            <div className="text-xs text-(--text-secondary)">GPS accuracy: ±{selectedEdge.provenance.accuracyM.toFixed(1)}m</div>
           )}
           {selectedEdge.provenance.verifiedAt && (
             <div className="text-xs text-(--text-secondary)">
               Verified: {new Date(selectedEdge.provenance.verifiedAt).toLocaleString()}
             </div>
           )}
-          <p className="pt-1 text-xs text-(--text-muted)">
-            Correction actions (walk this edge, accept risk) land in the next pass.
-          </p>
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button size="sm" variant="secondary" onClick={() => onStartWalkStrip(selectedEdge.id)}>
+              Walk a strip
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => onStartTrimEdge(selectedEdge.id)}>
+              Trim an edge
+            </Button>
+            {selectedEdge.provenance.kind === 'satellite' && !selectedEdge.provenance.acceptedRisk && (
+              <Button size="sm" variant="ghost" onClick={() => acceptRisk(selectedEdge.id)}>
+                Accept risk
+              </Button>
+            )}
+            {selectedEdge.provenance.kind === 'satellite' && selectedEdge.provenance.acceptedRisk && (
+              <Button size="sm" variant="ghost" onClick={() => revokeRisk(selectedEdge.id)}>
+                Revoke accepted risk
+              </Button>
+            )}
+          </div>
         </section>
       )}
 

@@ -62,3 +62,16 @@ export function projectAll(projection: LocalProjection, points: LatLng[]): Local
 export function unprojectAll(projection: LocalProjection, points: LocalPoint[]): LatLng[] {
   return points.map((p) => projection.toLatLng(p))
 }
+
+/**
+ * The sweep heading (degrees, standard math convention — 0° = east,
+ * counter-clockwise) implied by two tapped points along a visible crop
+ * row. This is the whole "tap crop-row heading" correction: it only ever
+ * feeds a SweepStrategy override, never touches the boundary.
+ */
+export function headingDegBetween(projection: LocalProjection, a: LatLng, b: LatLng): number {
+  const pa = projection.toLocal(a)
+  const pb = projection.toLocal(b)
+  const rad = Math.atan2(pb.y - pa.y, pb.x - pa.x)
+  return ((rad * 180) / Math.PI + 360) % 360
+}

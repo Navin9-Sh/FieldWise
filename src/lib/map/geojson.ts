@@ -3,6 +3,7 @@
  * can render. Kept separate from FieldMap.tsx so the mapping logic can be
  * reasoned about (and, if useful later, tested) without touching MapLibre.
  */
+import { circle } from '@turf/turf'
 import type { Feature, FeatureCollection, LineString, Point, Polygon } from 'geojson'
 import type { LocalProjection } from '@/lib/geo/projection'
 import type { FieldBoundary, LatLng, NoSprayZone, SprayPlan } from '@/lib/geo/types'
@@ -30,7 +31,11 @@ export function boundaryEdgesToFeatureCollection(boundary: FieldBoundary): Featu
       const b = boundary.vertices[edge.toIndex]
       return {
         type: 'Feature',
-        properties: { edgeId: edge.id, provenance: edge.provenance.kind },
+        properties: {
+          edgeId: edge.id,
+          provenance: edge.provenance.kind,
+          acceptedRisk: edge.provenance.acceptedRisk === true,
+        },
         geometry: {
           type: 'LineString',
           coordinates: [
@@ -117,3 +122,8 @@ export function boundsOfLatLng(points: LatLng[]): [[number, number], [number, nu
 }
 
 export const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
+
+/** A circle polygon around a point, radius in meters — used to render the simulated GPS accuracy ring while walking a correction. */
+export function accuracyCircleFeature(center: LatLng, radiusM: number): Feature<Polygon> {
+  return circle([center.lon, center.lat], radiusM / 1000, { steps: 32, units: 'kilometers' }) as Feature<Polygon>
+}

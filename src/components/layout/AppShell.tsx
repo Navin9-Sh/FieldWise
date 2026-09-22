@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { ReadinessBadge } from './ReadinessBadge'
+import { RecomputeTimingBadge } from './RecomputeTimingBadge'
 import { Stepper } from './Stepper'
 import { useFieldStore, type WorkflowStep, WORKFLOW_STEPS } from '@/store/useFieldStore'
 
@@ -13,6 +14,7 @@ export function AppShell({ children }: AppShellProps) {
   const boundary = useFieldStore((s) => s.boundary)
   const sprayPlan = useFieldStore((s) => s.sprayPlan)
   const readiness = useFieldStore((s) => s.readiness)
+  const lastRecomputeMs = useFieldStore((s) => s.lastRecomputeMs)
 
   // Gate later steps behind having the data they need — prevents the
   // pilot from landing on "Send to Vehicle" with nothing planned.
@@ -40,7 +42,10 @@ export function AppShell({ children }: AppShellProps) {
 
         <Stepper current={currentStep} unlocked={unlocked} onSelect={setStep} />
 
-        <ReadinessBadge readiness={readiness} />
+        <div className="flex items-center gap-2">
+          <RecomputeTimingBadge lastRecomputeMs={lastRecomputeMs} />
+          <ReadinessBadge readiness={readiness} />
+        </div>
       </header>
 
       <main className="flex flex-1 flex-col overflow-hidden">{children}</main>

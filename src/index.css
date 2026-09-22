@@ -49,6 +49,8 @@
   --color-provenance-walked-bg: #eaf1fe;
   --color-provenance-confirmed: #16a34a; /* green — verified, cleared */
   --color-provenance-confirmed-bg: #e9f9ee;
+  --color-provenance-accepted: #7c3aed; /* violet — risk knowingly accepted, NOT verified; must never read as "walked" */
+  --color-provenance-accepted-bg: #f3ebfe;
 
   /* Semantic status */
   --color-danger: #dc2626;

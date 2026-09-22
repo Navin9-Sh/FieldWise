@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { acceptEdgeRisk, applyWalkedEdgeCorrection, revokeAcceptedRisk } from '@/lib/geo/delta'
 import { DEFAULT_DRONE_PROFILE } from '@/lib/geo/defaults'
 import { planSprayPath } from '@/lib/geo/planner'
 import {
@@ -9,7 +10,15 @@ import {
 } from '@/lib/geo/projection'
 import { computeReadiness } from '@/lib/geo/readiness'
 import { loadSampleField } from '@/lib/geo/sampleField'
-import type { DroneProfile, FieldBoundary, NoSprayZone, ReadinessSummary, SprayPlan, SweepStrategy } from '@/lib/geo/types'
+import type {
+  DroneProfile,
+  FieldBoundary,
+  LatLng,
+  NoSprayZone,
+  ReadinessSummary,
+  SprayPlan,
+  SweepStrategy,
+} from '@/lib/geo/types'
 
 /** The five-step pilot workflow, matches the header stepper 1:1. */
 export const WORKFLOW_STEPS = ['import', 'verify', 'plan', 'simulate', 'send'] as const
@@ -38,8 +47,15 @@ interface FieldState {
   /** Recomputed by the readiness engine whenever boundary edge provenance changes. */
   readiness: ReadinessSummary | null
 
-  /** The edge currently selected on the map/Verify list — read-only for now; the correction flow (next pass) will act on it. */
+  /** The edge currently selected on the map/Verify list — this is what the correction actions below act on. */
   selectedEdgeId: string | null
+
+  /**
+   * How long the last recompute() took, in milliseconds. Displayed live
+   * in the header so "the plan re-plans in ~1s after a correction" is a
+   * number judges can watch, not a claim to take on faith.
+   */
+  lastRecomputeMs: number | null
 
   setStep: (step: WorkflowStep) => void
   setBoundary: (boundary: FieldBoundary | null) => void
@@ -48,6 +64,10 @@ interface FieldState {
   setDroneProfile: (profile: DroneProfile) => void
   setSweepStrategy: (strategy: SweepStrategy) => void
   setSelectedEdgeId: (edgeId: string | null) => void
+  /** "Walk a strip" / "Trim an edge" — both are this one delta merge, see lib/geo/delta.ts for why. */
+  walkEdge: (edgeId: string, walkedPoints: LatLng[], accuracyM: number) => void
+  acceptRisk: (edgeId: string) => void
+  revokeRisk: (edgeId: string) => void
   loadSample: () => void
   reset: () => void
 }
@@ -56,6 +76,7 @@ interface DerivedFields {
   projection: LocalProjection | null
   sprayPlan: SprayPlan | null
   readiness: ReadinessSummary | null
+  lastRecomputeMs: number
 }
 
 /**
@@ -67,7 +88,8 @@ interface DerivedFields {
  *
  * Pure geometry-core functions do the real work (lib/geo/planner.ts,
  * readiness.ts); this is just wiring, which is what keeps the ~1s
- * re-plan-on-correction path traceable.
+ * re-plan-on-correction path traceable — and it times itself, since
+ * "instant re-plan" is a specific claim made to judges, not an assumption.
  */
 function recompute(input: {
   boundary: FieldBoundary | null
@@ -75,10 +97,11 @@ function recompute(input: {
   droneProfile: DroneProfile
   sweepStrategy: SweepStrategy
 }): DerivedFields {
+  const t0 = performance.now()
   const { boundary, noSprayZones, droneProfile, sweepStrategy } = input
 
   if (!boundary) {
-    return { projection: null, sprayPlan: null, readiness: null }
+    return { projection: null, sprayPlan: null, readiness: null, lastRecomputeMs: performance.now() - t0 }
   }
 
   const origin = approximateCentroidLatLng(boundary.vertices)
@@ -94,7 +117,10 @@ function recompute(input: {
     sweepStrategy,
   })
 
-  return { projection, sprayPlan, readiness }
+  const lastRecomputeMs = performance.now() - t0
+  console.log(`[FieldWise] Re-planned in ${lastRecomputeMs.toFixed(1)}ms`)
+
+  return { projection, sprayPlan, readiness, lastRecomputeMs }
 }
 
 const initialState = {
@@ -107,6 +133,7 @@ const initialState = {
   sprayPlan: null as SprayPlan | null,
   readiness: null as ReadinessSummary | null,
   selectedEdgeId: null as string | null,
+  lastRecomputeMs: null as number | null,
 }
 
 /**
@@ -146,6 +173,27 @@ export const useFieldStore = create<FieldState>((set) => ({
     set((state) => ({ sweepStrategy, ...recompute({ ...state, sweepStrategy }) })),
 
   setSelectedEdgeId: (selectedEdgeId) => set({ selectedEdgeId }),
+
+  walkEdge: (edgeId, walkedPoints, accuracyM) =>
+    set((state) => {
+      if (!state.boundary) return state
+      const boundary = applyWalkedEdgeCorrection(state.boundary, edgeId, walkedPoints, accuracyM)
+      return { boundary, selectedEdgeId: null, ...recompute({ ...state, boundary }) }
+    }),
+
+  acceptRisk: (edgeId) =>
+    set((state) => {
+      if (!state.boundary) return state
+      const boundary = acceptEdgeRisk(state.boundary, edgeId)
+      return { boundary, ...recompute({ ...state, boundary }) }
+    }),
+
+  revokeRisk: (edgeId) =>
+    set((state) => {
+      if (!state.boundary) return state
+      const boundary = revokeAcceptedRisk(state.boundary, edgeId)
+      return { boundary, ...recompute({ ...state, boundary }) }
+    }),
 
   loadSample: () => {
     const preset = loadSampleField()

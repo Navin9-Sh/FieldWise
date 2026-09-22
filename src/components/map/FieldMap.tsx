@@ -13,6 +13,7 @@ import { SAMPLE_FIELD_CENTER } from '@/lib/geo/sampleField'
 import type { FieldBoundary, LatLng, NoSprayZone, SprayPlan } from '@/lib/geo/types'
 import { SATELLITE_STYLE } from '@/lib/map/basemap'
 import {
+  accuracyCircleFeature,
   boundaryEdgesToFeatureCollection,
   boundaryToPolygonFeature,
   boundsOfLatLng,
@@ -33,9 +34,20 @@ const SOURCE = {
   homePoint: 'home-point',
   drawProgress: 'draw-progress',
   drawProgressPoints: 'draw-progress-points',
+  walkTrace: 'walk-trace',
+  pilotAccuracy: 'pilot-accuracy',
+  pilotMarker: 'pilot-marker',
 } as const
 
 export type DrawTarget = 'boundary' | 'zone' | null
+
+/** "Walk a strip" and "trim an edge" are the same underlying delta merge (see lib/geo/delta.ts) — mode only changes which way the pilot marker starts nudged and the overlay's copy. */
+export interface CorrectionTarget {
+  mode: 'walk-strip' | 'trim-edge'
+  edgeId: string
+}
+
+const MIN_TRACE_POINT_GAP_M = 2.5
 
 interface FieldMapProps {
   boundary: FieldBoundary | null
@@ -52,11 +64,48 @@ interface FieldMapProps {
   onDrawCancel: () => void
   /** In-progress GPS walk points (real or simulated), drawn the same way as a click-drawn polygon. */
   liveWalkPath?: LatLng[]
+
+  /** Drag-the-pilot-marker correction — "walk a strip" / "trim an edge". */
+  correctionTarget: CorrectionTarget | null
+  onCorrectionFinish: (trace: LatLng[], accuracyM: number) => void
+  onCorrectionCancel: () => void
+
+  /** Tap-two-points-along-a-row correction. */
+  cropRowTapActive: boolean
+  onCropRowTap: (a: LatLng, b: LatLng) => void
 }
 
 function setData(map: MapLibreMap, sourceId: string, data: GeoJSON.GeoJSON) {
   const source = map.getSource(sourceId) as GeoJSONSource | undefined
   source?.setData(data)
+}
+
+/**
+ * A starting point for the draggable pilot marker: the target edge's
+ * midpoint, nudged a few meters along its outward normal (or inward, for
+ * a trim). "Outward" is approximated as away from the projection's local
+ * origin — a reasonable proxy for the field's interior at field scale.
+ */
+function nudgedEdgeMidpoint(
+  boundary: FieldBoundary,
+  edgeId: string,
+  projection: LocalProjection,
+  direction: 'out' | 'in',
+): LatLng | null {
+  const edge = boundary.edges.find((e) => e.id === edgeId)
+  if (!edge) return null
+
+  const a = projection.toLocal(boundary.vertices[edge.fromIndex])
+  const b = projection.toLocal(boundary.vertices[edge.toIndex])
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy) || 1
+  const n1 = { x: -dy / len, y: dx / len }
+  const outward = mid.x * n1.x + mid.y * n1.y >= 0 ? n1 : { x: -n1.x, y: -n1.y }
+  const sign = direction === 'out' ? 1 : -1
+  const nudged = { x: mid.x + outward.x * 4 * sign, y: mid.y + outward.y * 4 * sign }
+  return projection.toLatLng(nudged)
 }
 
 export function FieldMap({
@@ -73,12 +122,26 @@ export function FieldMap({
   onDrawFinish,
   onDrawCancel,
   liveWalkPath = [],
+  correctionTarget,
+  onCorrectionFinish,
+  onCorrectionCancel,
+  cropRowTapActive,
+  onCropRowTap,
 }: FieldMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [drawVertices, setDrawVertices] = useState<LatLng[]>([])
   const lastFittedBoundaryId = useRef<string | null>(null)
+
+  // Correction (walk-strip / trim-edge) drag session state.
+  const [walkTrace, setWalkTrace] = useState<LatLng[]>([])
+  const [pilotPosition, setPilotPosition] = useState<LatLng | null>(null)
+  const [accuracyM, setAccuracyM] = useState(4)
+  const isDraggingPilotRef = useRef(false)
+
+  // Crop-row tap session state.
+  const [cropRowTapPoints, setCropRowTapPoints] = useState<LatLng[]>([])
 
   // Refs so the map's event handlers (registered once) always see the
   // latest callback/props without needing to be re-registered.
@@ -88,11 +151,64 @@ export function FieldMap({
   showEdgesRef.current = showEdges
   const onSelectEdgeRef = useRef(onSelectEdge)
   onSelectEdgeRef.current = onSelectEdge
+  const projectionRef = useRef(projection)
+  projectionRef.current = projection
+  const accuracyMRef = useRef(accuracyM)
+  accuracyMRef.current = accuracyM
+  const correctionActiveRef = useRef(correctionTarget !== null)
+  correctionActiveRef.current = correctionTarget !== null
+  const cropRowTapActiveRef = useRef(cropRowTapActive)
+  cropRowTapActiveRef.current = cropRowTapActive
+  const onCropRowTapRef = useRef(onCropRowTap)
+  onCropRowTapRef.current = onCropRowTap
 
   // Drawing is reset whenever the target changes (including turning off).
   useEffect(() => {
     setDrawVertices([])
   }, [drawTarget])
+
+  // Crop-row tap points reset whenever the mode toggles.
+  useEffect(() => {
+    setCropRowTapPoints([])
+  }, [cropRowTapActive])
+
+  // Starting a correction session: seed the pilot marker at a nudged
+  // midpoint of the target edge and pick a fresh simulated GPS accuracy
+  // (a real phone's fix quality drifts session to session, so this isn't
+  // pretending to be more precise than that). Keyed on the target's
+  // identity, not on boundary/projection references, so this doesn't
+  // reset mid-drag if something unrelated recomputes.
+  const correctionKey = correctionTarget ? `${correctionTarget.mode}:${correctionTarget.edgeId}` : null
+  useEffect(() => {
+    if (!correctionTarget) {
+      setPilotPosition(null)
+      setWalkTrace([])
+      return
+    }
+    const b = boundary
+    const proj = projection
+    if (!b || !proj) return
+    const start = nudgedEdgeMidpoint(b, correctionTarget.edgeId, proj, correctionTarget.mode === 'walk-strip' ? 'out' : 'in')
+    setPilotPosition(start)
+    setWalkTrace([])
+    setAccuracyM(3 + Math.random() * 2)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on correctionKey, not boundary/projection identity
+  }, [correctionKey])
+
+  // Disable map panning for the whole correction session (not just
+  // during the mousedown-on-marker window) — doing this reactively
+  // inside the mousedown handler loses a race against MapLibre's own
+  // built-in drag-pan handler, which can already start panning before a
+  // same-event listener gets a chance to call dragPan.disable().
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (correctionTarget) {
+      map.dragPan.disable()
+    } else {
+      map.dragPan.enable()
+    }
+  }, [correctionTarget])
 
   // ---- Map lifecycle -----------------------------------------------
   useEffect(() => {
@@ -106,6 +222,14 @@ export function FieldMap({
       attributionControl: { compact: true },
     })
     mapRef.current = map
+
+    // Dev-only debug hook (never ships in production builds) — lets a
+    // browser-driven verification script (Playwright etc.) project
+    // lngLat to screen pixels for the drag interactions, without any
+    // app code needing to know it's being watched.
+    if (import.meta.env.DEV) {
+      ;(window as unknown as { __fieldwiseMap?: MapLibreMap }).__fieldwiseMap = map
+    }
 
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
 
@@ -167,12 +291,25 @@ export function FieldMap({
         id: 'boundary-edges-unverified',
         type: 'line',
         source: SOURCE.boundaryEdges,
-        filter: ['==', ['get', 'provenance'], 'satellite'],
+        filter: ['all', ['==', ['get', 'provenance'], 'satellite'], ['!=', ['get', 'acceptedRisk'], true]],
         layout: { 'line-cap': 'round' },
         paint: {
           'line-color': PROVENANCE_COLORS.satellite,
           'line-width': 4,
           'line-dasharray': [2, 1.6],
+        },
+      })
+      // Risk explicitly accepted without walking — dashed violet, deliberately never "walked" blue.
+      map.addLayer({
+        id: 'boundary-edges-accepted',
+        type: 'line',
+        source: SOURCE.boundaryEdges,
+        filter: ['all', ['==', ['get', 'provenance'], 'satellite'], ['==', ['get', 'acceptedRisk'], true]],
+        layout: { 'line-cap': 'round' },
+        paint: {
+          'line-color': PROVENANCE_COLORS.accepted,
+          'line-width': 4,
+          'line-dasharray': [3, 1.4],
         },
       })
 
@@ -240,6 +377,49 @@ export function FieldMap({
         paint: { 'circle-radius': 5, 'circle-color': '#2563eb', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
       })
 
+      // Field-Truth Walk correction: the walked trace so far, the
+      // simulated GPS accuracy ring, and the draggable pilot marker.
+      map.addSource(SOURCE.walkTrace, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'walk-trace-line',
+        type: 'line',
+        source: SOURCE.walkTrace,
+        layout: { 'line-cap': 'round' },
+        paint: { 'line-color': PROVENANCE_COLORS.walked, 'line-width': 3 },
+      })
+      map.addSource(SOURCE.pilotAccuracy, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'pilot-accuracy-fill',
+        type: 'fill',
+        source: SOURCE.pilotAccuracy,
+        paint: { 'fill-color': PROVENANCE_COLORS.walked, 'fill-opacity': 0.15 },
+      })
+      map.addLayer({
+        id: 'pilot-accuracy-outline',
+        type: 'line',
+        source: SOURCE.pilotAccuracy,
+        paint: { 'line-color': PROVENANCE_COLORS.walked, 'line-width': 1, 'line-opacity': 0.5 },
+      })
+      map.addSource(SOURCE.pilotMarker, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      // Wide invisible layer purely so the marker is easy to grab.
+      map.addLayer({
+        id: 'pilot-marker-hit',
+        type: 'circle',
+        source: SOURCE.pilotMarker,
+        paint: { 'circle-radius': 22, 'circle-opacity': 0 },
+      })
+      map.addLayer({
+        id: 'pilot-marker-dot',
+        type: 'circle',
+        source: SOURCE.pilotMarker,
+        paint: {
+          'circle-radius': 8,
+          'circle-color': PROVENANCE_COLORS.walked,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2.5,
+        },
+      })
+
       setLoaded(true)
       // Safety net: containers inside flex layouts sometimes report zero
       // size on first paint, before layout settles.
@@ -249,6 +429,18 @@ export function FieldMap({
     map.on('click', (e: MapMouseEvent) => {
       if (drawTargetRef.current) {
         setDrawVertices((prev) => [...prev, { lon: e.lngLat.lng, lat: e.lngLat.lat }])
+        return
+      }
+      if (cropRowTapActiveRef.current) {
+        const point: LatLng = { lon: e.lngLat.lng, lat: e.lngLat.lat }
+        setCropRowTapPoints((prev) => {
+          const next = [...prev, point]
+          if (next.length === 2) {
+            onCropRowTapRef.current(next[0], next[1])
+            return []
+          }
+          return next
+        })
         return
       }
       if (!showEdgesRef.current) return
@@ -264,6 +456,56 @@ export function FieldMap({
       if (!drawTargetRef.current) map.getCanvas().style.cursor = ''
     })
 
+    // Field-Truth Walk: drag the pilot marker to record a trace. The
+    // recorded points get a small random jitter around the true drag
+    // position — the marker itself tracks the cursor exactly, but what
+    // gets fed into the boundary correction is jittered within the
+    // session's simulated GPS accuracy, same as a real fix would be.
+    map.on('mousedown', 'pilot-marker-hit', (e) => {
+      if (!correctionActiveRef.current) return
+      e.preventDefault()
+      isDraggingPilotRef.current = true
+      map.getCanvas().style.cursor = 'grabbing'
+    })
+    map.on('mouseenter', 'pilot-marker-hit', () => {
+      if (correctionActiveRef.current) map.getCanvas().style.cursor = 'grab'
+    })
+    map.on('mouseleave', 'pilot-marker-hit', () => {
+      if (correctionActiveRef.current && !isDraggingPilotRef.current) map.getCanvas().style.cursor = ''
+    })
+    map.on('mousemove', (e: MapMouseEvent) => {
+      if (!isDraggingPilotRef.current) return
+      const truePosition: LatLng = { lon: e.lngLat.lng, lat: e.lngLat.lat }
+      setPilotPosition(truePosition)
+
+      const proj = projectionRef.current
+      if (!proj) return
+      const accuracy = accuracyMRef.current
+      const trueLocal = proj.toLocal(truePosition)
+      const jitterAngle = Math.random() * Math.PI * 2
+      const jitterMag = Math.random() * accuracy
+      const jitteredLocal = {
+        x: trueLocal.x + Math.cos(jitterAngle) * jitterMag,
+        y: trueLocal.y + Math.sin(jitterAngle) * jitterMag,
+      }
+      const recordedPoint = proj.toLatLng(jitteredLocal)
+
+      setWalkTrace((prev) => {
+        const last = prev[prev.length - 1]
+        if (last) {
+          const lastLocal = proj.toLocal(last)
+          const dist = Math.hypot(jitteredLocal.x - lastLocal.x, jitteredLocal.y - lastLocal.y)
+          if (dist < MIN_TRACE_POINT_GAP_M) return prev
+        }
+        return [...prev, recordedPoint]
+      })
+    })
+    map.on('mouseup', () => {
+      if (!isDraggingPilotRef.current) return
+      isDraggingPilotRef.current = false
+      map.getCanvas().style.cursor = correctionActiveRef.current ? 'grab' : ''
+    })
+
     return () => {
       map.remove()
       mapRef.current = null
@@ -271,12 +513,12 @@ export function FieldMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-time map init; live values flow in via refs/effects below
   }, [])
 
-  // Drawing cursor
+  // Drawing / crop-row-tap cursor
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-    map.getCanvas().style.cursor = drawTarget ? 'crosshair' : ''
-  }, [drawTarget])
+    map.getCanvas().style.cursor = drawTarget || cropRowTapActive ? 'crosshair' : ''
+  }, [drawTarget, cropRowTapActive])
 
   // ---- Data sync effects ---------------------------------------------
   useEffect(() => {
@@ -339,7 +581,13 @@ export function FieldMap({
     const map = mapRef.current
     if (!map || !loaded) return
     const vis = (v: boolean) => (v ? 'visible' : 'none')
-    for (const id of ['boundary-edges-hit', 'boundary-edges-selection', 'boundary-edges-verified', 'boundary-edges-unverified']) {
+    for (const id of [
+      'boundary-edges-hit',
+      'boundary-edges-selection',
+      'boundary-edges-verified',
+      'boundary-edges-unverified',
+      'boundary-edges-accepted',
+    ]) {
       map.setLayoutProperty(id, 'visibility', vis(showEdges))
     }
   }, [showEdges, loaded])
@@ -381,6 +629,40 @@ export function FieldMap({
     })
   }, [drawVertices, liveWalkPath, drawTarget, loaded])
 
+  // Crop-row tap points — same visual language (dots + connecting line),
+  // reusing the draw-progress layers since the two modes never overlap.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded || drawTarget || liveWalkPath.length > 0) return
+    if (cropRowTapPoints.length === 0) {
+      setData(map, SOURCE.drawProgress, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.drawProgressPoints, EMPTY_FEATURE_COLLECTION)
+      return
+    }
+    setData(map, SOURCE.drawProgress, latLngLineFeature(cropRowTapPoints))
+    setData(map, SOURCE.drawProgressPoints, {
+      type: 'FeatureCollection',
+      features: cropRowTapPoints.map((p) => latLngPointFeature(p)),
+    })
+  }, [cropRowTapPoints, drawTarget, liveWalkPath, loaded])
+
+  // Field-Truth Walk correction: pilot marker, accuracy ring, and trace.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+
+    if (!correctionTarget || !pilotPosition) {
+      setData(map, SOURCE.pilotMarker, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.pilotAccuracy, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.walkTrace, EMPTY_FEATURE_COLLECTION)
+      return
+    }
+
+    setData(map, SOURCE.pilotMarker, latLngPointFeature(pilotPosition))
+    setData(map, SOURCE.pilotAccuracy, accuracyCircleFeature(pilotPosition, accuracyM))
+    setData(map, SOURCE.walkTrace, walkTrace.length >= 2 ? latLngLineFeature(walkTrace) : EMPTY_FEATURE_COLLECTION)
+  }, [correctionTarget, pilotPosition, accuracyM, walkTrace, loaded])
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
@@ -407,6 +689,36 @@ export function FieldMap({
               Finish ({drawVertices.length})
             </Button>
           </div>
+        </div>
+      )}
+
+      {correctionTarget && (
+        <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-(--radius-card) border border-provenance-walked/30 bg-(--surface-panel) px-4 py-2.5 shadow-(--shadow-panel)">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-(--text-primary)">
+              {correctionTarget.mode === 'walk-strip' ? 'Drag the pilot marker to walk the strip' : 'Drag the pilot marker along the true edge'}
+              {walkTrace.length > 0 && (
+                <span className="text-(--text-muted)">
+                  {' '}
+                  · {walkTrace.length} point{walkTrace.length === 1 ? '' : 's'} · ±{accuracyM.toFixed(1)}m accuracy
+                </span>
+              )}
+            </span>
+            <Button size="sm" variant="secondary" onClick={onCorrectionCancel}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="primary" disabled={walkTrace.length === 0} onClick={() => onCorrectionFinish(walkTrace, accuracyM)}>
+              Finish walk
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {cropRowTapActive && (
+        <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-(--radius-card) border border-(--border-subtle) bg-(--surface-panel) px-4 py-2.5 shadow-(--shadow-panel)">
+          <span className="text-sm text-(--text-primary)">
+            Tap two points along a visible crop row ({cropRowTapPoints.length}/2)
+          </span>
         </div>
       )}
     </div>

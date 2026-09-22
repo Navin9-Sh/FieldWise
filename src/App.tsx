@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
-import { FieldMap, type DrawTarget } from '@/components/map/FieldMap'
+import { FieldMap, type CorrectionTarget, type DrawTarget } from '@/components/map/FieldMap'
 import { ImportPanel } from '@/components/panels/ImportPanel'
 import { PanelPlaceholder } from '@/components/panels/PanelPlaceholder'
 import { PlanPanel } from '@/components/panels/PlanPanel'
 import { VerifyPanel } from '@/components/panels/VerifyPanel'
 import { createBoundary } from '@/lib/geo/boundary'
+import { headingDegBetween } from '@/lib/geo/projection'
 import type { LatLng } from '@/lib/geo/types'
 import { useFieldStore } from '@/store/useFieldStore'
 
@@ -19,13 +20,17 @@ function App() {
   const setSelectedEdgeId = useFieldStore((s) => s.setSelectedEdgeId)
   const setBoundary = useFieldStore((s) => s.setBoundary)
   const addNoSprayZone = useFieldStore((s) => s.addNoSprayZone)
+  const walkEdge = useFieldStore((s) => s.walkEdge)
+  const setSweepStrategy = useFieldStore((s) => s.setSweepStrategy)
 
-  // Transient draw/GPS-walk UI state — shared between the Import panel
+  // Transient interaction UI state — shared between a sidebar panel
   // (which triggers/labels it) and FieldMap (which renders it). Lives
-  // here rather than in the store since it's pure interaction state, not
-  // session data.
+  // here rather than in the store since it's pure UI state, not session
+  // data: drawing, GPS-walk capture, edge corrections, crop-row tapping.
   const [drawTarget, setDrawTarget] = useState<DrawTarget>(null)
   const [liveWalkPath, setLiveWalkPath] = useState<LatLng[]>([])
+  const [correctionTarget, setCorrectionTarget] = useState<CorrectionTarget | null>(null)
+  const [cropRowTapActive, setCropRowTapActive] = useState(false)
 
   const handleDrawFinish = (vertices: LatLng[]) => {
     if (drawTarget === 'boundary') {
@@ -34,6 +39,18 @@ function App() {
       addNoSprayZone({ id: `zone-${Date.now()}`, label: `Zone ${noSprayZones.length + 1}`, vertices })
     }
     setDrawTarget(null)
+  }
+
+  const handleCorrectionFinish = (trace: LatLng[], accuracyM: number) => {
+    if (correctionTarget) walkEdge(correctionTarget.edgeId, trace, accuracyM)
+    setCorrectionTarget(null)
+  }
+
+  const handleCropRowTap = (a: LatLng, b: LatLng) => {
+    if (projection) {
+      setSweepStrategy({ kind: 'crop-row', headingDeg: headingDegBetween(projection, a, b) })
+    }
+    setCropRowTapActive(false)
   }
 
   return (
@@ -49,8 +66,17 @@ function App() {
               onGpsWalkPointsChange={setLiveWalkPath}
             />
           )}
-          {currentStep === 'verify' && <VerifyPanel />}
-          {currentStep === 'plan' && <PlanPanel />}
+          {currentStep === 'verify' && (
+            <VerifyPanel
+              correctionTarget={correctionTarget}
+              onStartWalkStrip={(edgeId) => setCorrectionTarget({ mode: 'walk-strip', edgeId })}
+              onStartTrimEdge={(edgeId) => setCorrectionTarget({ mode: 'trim-edge', edgeId })}
+              onCancelCorrection={() => setCorrectionTarget(null)}
+            />
+          )}
+          {currentStep === 'plan' && (
+            <PlanPanel cropRowTapActive={cropRowTapActive} onStartCropRowTap={() => setCropRowTapActive(true)} onCancelCropRowTap={() => setCropRowTapActive(false)} />
+          )}
           {currentStep === 'simulate' && (
             <PanelPlaceholder
               title="Simulate"
@@ -82,6 +108,11 @@ function App() {
             onDrawFinish={handleDrawFinish}
             onDrawCancel={() => setDrawTarget(null)}
             liveWalkPath={liveWalkPath}
+            correctionTarget={correctionTarget}
+            onCorrectionFinish={handleCorrectionFinish}
+            onCorrectionCancel={() => setCorrectionTarget(null)}
+            cropRowTapActive={cropRowTapActive}
+            onCropRowTap={handleCropRowTap}
           />
         </div>
       </div>

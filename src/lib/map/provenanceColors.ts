@@ -8,4 +8,5 @@ export const PROVENANCE_COLORS = {
   satellite: '#d97706',
   walked: '#2563eb',
   confirmed: '#16a34a',
+  accepted: '#7c3aed',
 } as const

@@ -1,25 +1,41 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { StatCard } from '@/components/ui/StatCard'
 import { useFieldStore } from '@/store/useFieldStore'
 
-export function PlanPanel() {
+interface PlanPanelProps {
+  cropRowTapActive: boolean
+  onStartCropRowTap: () => void
+  onCancelCropRowTap: () => void
+}
+
+export function PlanPanel({ cropRowTapActive, onStartCropRowTap, onCancelCropRowTap }: PlanPanelProps) {
   const boundary = useFieldStore((s) => s.boundary)
   const sprayPlan = useFieldStore((s) => s.sprayPlan)
   const droneProfile = useFieldStore((s) => s.droneProfile)
   const sweepStrategy = useFieldStore((s) => s.sweepStrategy)
   const setSweepStrategy = useFieldStore((s) => s.setSweepStrategy)
   const setStep = useFieldStore((s) => s.setStep)
+  const lastRecomputeMs = useFieldStore((s) => s.lastRecomputeMs)
 
   const [headingInput, setHeadingInput] = useState(
     sweepStrategy.kind === 'min-turns' ? '0' : String(sweepStrategy.headingDeg),
   )
+
+  // Keep the input in sync when the heading changes from outside this
+  // input (e.g. a crop-row tap on the map sets sweepStrategy directly).
+  useEffect(() => {
+    if (sweepStrategy.kind !== 'min-turns') {
+      setHeadingInput(sweepStrategy.headingDeg.toFixed(1))
+    }
+  }, [sweepStrategy])
 
   if (!boundary || !sprayPlan) {
     return <div className="p-4 text-sm text-(--text-secondary)">No field loaded yet — go back to Import.</div>
   }
 
   const sprayPassCount = sprayPlan.sorties.reduce((sum, s) => sum + s.passes.filter((p) => p.spraying).length, 0)
+  const isFixedOrCropRow = sweepStrategy.kind === 'fixed-heading' || sweepStrategy.kind === 'crop-row'
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -38,6 +54,7 @@ export function PlanPanel() {
         <StatCard label="Area" value={sprayPlan.areaHa.toFixed(2)} unit="ha" />
         <StatCard label="Sweep heading" value={sprayPlan.headingDeg.toFixed(0)} unit="°" hint={`${sprayPassCount} passes`} />
       </div>
+      {lastRecomputeMs !== null && <div className="text-[11px] text-(--text-muted)">Re-planned in {lastRecomputeMs.toFixed(1)}ms</div>}
 
       <div className="h-px bg-(--border-subtle)" />
 
@@ -55,13 +72,13 @@ export function PlanPanel() {
           <label className="flex items-center gap-1.5 text-sm text-(--text-primary)">
             <input
               type="radio"
-              checked={sweepStrategy.kind !== 'min-turns'}
+              checked={isFixedOrCropRow}
               onChange={() => setSweepStrategy({ kind: 'fixed-heading', headingDeg: Number(headingInput) || 0 })}
             />
             Fixed / crop-row
           </label>
         </div>
-        {sweepStrategy.kind !== 'min-turns' && (
+        {isFixedOrCropRow && (
           <div className="flex items-center gap-2">
             <input
               type="number"
@@ -74,6 +91,18 @@ export function PlanPanel() {
             />
             <span className="text-xs text-(--text-muted)">degrees from east, counter-clockwise</span>
           </div>
+        )}
+        {sweepStrategy.kind === 'crop-row' && (
+          <p className="text-xs text-provenance-walked">Set by tapping a crop row on the map.</p>
+        )}
+        {cropRowTapActive ? (
+          <Button size="sm" variant="secondary" onClick={onCancelCropRowTap}>
+            Cancel tap
+          </Button>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={onStartCropRowTap}>
+            Tap crop-row heading on map
+          </Button>
         )}
       </section>
 
