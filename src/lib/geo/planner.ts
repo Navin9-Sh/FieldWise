@@ -1,0 +1,134 @@
+/**
+ * The boustrophedon sweep planner. Ties together heading resolution,
+ * no-spray-zone clipping, and tank-aware sortie splitting into a single
+ * `planSprayPath` entry point — this is the function the correction flow
+ * calls on every edit for the ~1s re-plan, and what the Blind vs. Sighted
+ * replay runs twice against different boundaries.
+ *
+ * Approach: rotate the sprayable area into "sweep space" (sweep direction
+ * = +x axis, rows = horizontal lines of constant y), run the scanline
+ * even-odd algorithm from math.ts at each row to get one or more spray
+ * segments per row (this is what makes concave fields and no-spray zones
+ * "just work" — a row that dips into a concavity or crosses a zone comes
+ * back as multiple disjoint segments automatically), order the segments
+ * boustrophedon-style (alternating direction per row) connected by
+ * transit legs, then rotate back to field-local space.
+ */
+import { splitIntoSorties } from './droneProfile'
+import { minTurnsHeadingRad, polygonAreaM2, rotate, scanlineSpans } from './math'
+import { multiPolygonAreaM2, subtractNoSprayZones, type LocalPolygon } from './noSprayZones'
+import type { DroneProfile, LocalPoint, SprayPass, SprayPlan, SweepStrategy } from './types'
+
+export interface PlanSprayPathParams {
+  boundaryLocal: LocalPoint[]
+  noSprayZonesLocal: LocalPoint[][]
+  droneProfile: DroneProfile
+  sweepStrategy: SweepStrategy
+  /** Overlap between adjacent passes as a fraction of swath (0.1 = 10% overlap). Defaults to 0. */
+  overlapFraction?: number
+  /** Launch/refill point; defaults to the boundary's first vertex. */
+  homePoint?: LocalPoint
+}
+
+function resolveHeadingRad(strategy: SweepStrategy, boundaryLocal: LocalPoint[]): number {
+  switch (strategy.kind) {
+    case 'min-turns':
+      return minTurnsHeadingRad(boundaryLocal)
+    case 'fixed-heading':
+    case 'crop-row':
+      return (strategy.headingDeg * Math.PI) / 180
+  }
+}
+
+function emptyPlan(headingRad: number): SprayPlan {
+  return {
+    sorties: [],
+    totalDistanceM: 0,
+    totalVolumeL: 0,
+    totalEstimatedMinutes: 0,
+    areaHa: 0,
+    headingDeg: (headingRad * 180) / Math.PI,
+  }
+}
+
+export function planSprayPath(params: PlanSprayPathParams): SprayPlan {
+  const { boundaryLocal, noSprayZonesLocal, droneProfile, sweepStrategy, overlapFraction = 0 } = params
+  const homePoint = params.homePoint ?? boundaryLocal[0]
+
+  const headingRad = resolveHeadingRad(sweepStrategy, boundaryLocal)
+  const sprayable = subtractNoSprayZones(boundaryLocal, noSprayZonesLocal)
+  const areaM2 = multiPolygonAreaM2(sprayable, polygonAreaM2)
+
+  if (areaM2 <= 0 || sprayable.length === 0) {
+    return emptyPlan(headingRad)
+  }
+
+  // Rotate every ring of every sprayable polygon into sweep space.
+  const rotatedPolys: LocalPolygon[] = sprayable.map((poly) => poly.map((ring) => ring.map((p) => rotate(p, -headingRad))))
+  const allRotatedPoints = rotatedPolys.flat(2)
+
+  const spacing = droneProfile.swathM * (1 - overlapFraction)
+  const yMin = Math.min(...allRotatedPoints.map((p) => p.y))
+  const yMax = Math.max(...allRotatedPoints.map((p) => p.y))
+
+  // Rows of [x0, x1] spans, keyed by row y — a row can carry multiple
+  // disjoint spans (a concave dent, or a no-spray zone bisecting it).
+  const rowsMap = new Map<number, Array<[number, number]>>()
+
+  // First row half a swath in from the extreme edge so the outermost
+  // strip is centered under a pass rather than sitting right at its rim.
+  let y = yMin + droneProfile.swathM / 2
+  while (y <= yMax - droneProfile.swathM / 2 + 1e-9) {
+    for (const poly of rotatedPolys) {
+      const spans = scanlineSpans(poly, y)
+      if (spans.length > 0) {
+        const existing = rowsMap.get(y) ?? []
+        rowsMap.set(y, [...existing, ...spans])
+      }
+    }
+    y += spacing
+  }
+
+  const rowYs = [...rowsMap.keys()].sort((a, b) => a - b)
+
+  // Boustrophedon ordering: alternate left-to-right / right-to-left per
+  // row, connecting every segment (within a row, and between rows) with
+  // an explicit transit leg so position tracking stays continuous.
+  const orderedRotated: Array<{ start: LocalPoint; end: LocalPoint; spraying: boolean }> = []
+  let cursor: LocalPoint | null = null
+
+  rowYs.forEach((rowY, rowIdx) => {
+    const segments = [...(rowsMap.get(rowY) ?? [])].sort((a, b) => a[0] - b[0])
+    const orderedSegments = rowIdx % 2 === 0 ? segments : [...segments].reverse()
+
+    for (const [x0, x1] of orderedSegments) {
+      const [fromX, toX] = rowIdx % 2 === 0 ? [x0, x1] : [x1, x0]
+      const start: LocalPoint = { x: fromX, y: rowY }
+      const end: LocalPoint = { x: toX, y: rowY }
+
+      if (cursor) {
+        orderedRotated.push({ start: cursor, end: start, spraying: false })
+      }
+      orderedRotated.push({ start, end, spraying: true })
+      cursor = end
+    }
+  })
+
+  // Rotate back to field-local space.
+  const passes: SprayPass[] = orderedRotated.map((seg) => ({
+    start: rotate(seg.start, headingRad),
+    end: rotate(seg.end, headingRad),
+    spraying: seg.spraying,
+  }))
+
+  const sorties = splitIntoSorties(passes, droneProfile, homePoint)
+
+  return {
+    sorties,
+    totalDistanceM: sorties.reduce((s, sortie) => s + sortie.distanceM, 0),
+    totalVolumeL: sorties.reduce((s, sortie) => s + sortie.volumeL, 0),
+    totalEstimatedMinutes: sorties.reduce((s, sortie) => s + sortie.estimatedMinutes, 0),
+    areaHa: areaM2 / 10_000,
+    headingDeg: (headingRad * 180) / Math.PI,
+  }
+}

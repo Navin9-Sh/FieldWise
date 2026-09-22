@@ -132,4 +132,6 @@ export interface ReadinessSummary {
   unverifiedEdges: number
   unverifiedLengthM: number
   acceptedRiskEdges: number
+  /** IDs of the specific edges blocking clearance — what the map highlights and the gate lists. */
+  blockingEdgeIds: string[]
 }
