@@ -16,6 +16,15 @@ export default defineConfig({
     // over HTTPS use `vite --host` with a trusted cert. Localhost is fine
     // for USB Web Serial during recording.
     host: true,
+    // Vite 5+ rejects requests whose Host header doesn't match a known
+    // hostname ("Blocked request" 403) as a DNS-rebinding protection —
+    // this is what breaks access through a forwarded VS Code dev tunnel
+    // (*.devtunnels.ms), since the tunnel's public hostname isn't
+    // localhost/the LAN IP Vite expects by default. Allow-listing the
+    // devtunnels.ms suffix (leading dot = that domain + all subdomains)
+    // permits exactly that one remote-access path without disabling the
+    // protection entirely (`allowedHosts: true` would allow *any* host).
+    allowedHosts: ['.devtunnels.ms'],
   },
   optimizeDeps: {
     // maplibre-gl spins up its tile-processing work in a Worker created
