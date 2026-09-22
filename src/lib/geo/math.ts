@@ -181,3 +181,42 @@ export function distancePointToSegment(p: LocalPoint, a: LocalPoint, b: LocalPoi
   t = Math.max(0, Math.min(1, t))
   return distance(p, { x: a.x + t * abx, y: a.y + t * aby })
 }
+
+/**
+ * Ramer-Douglas-Peucker polyline simplification. A raw GPS walk (real or
+ * simulated) can easily record dozens/hundreds of points for a single
+ * correction — without simplifying first, every recorded point would
+ * become its own boundary edge. This keeps the two points the walk
+ * actually needs to be represented by — every point whose perpendicular
+ * distance from the straight line between its neighbors is within
+ * `toleranceM` gets dropped; a point that represents a real turn/corner
+ * (further from that line than the tolerance) is kept.
+ *
+ * Always keeps the first and last points — those are what the caller
+ * anchors the new edge chain to, so they must survive simplification
+ * even if the path near them is locally near-straight.
+ */
+export function simplifyPolyline(points: LocalPoint[], toleranceM: number): LocalPoint[] {
+  if (points.length <= 2) return points
+
+  const first = points[0]
+  const last = points[points.length - 1]
+
+  let maxDist = -1
+  let maxIndex = -1
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = distancePointToSegment(points[i], first, last)
+    if (d > maxDist) {
+      maxDist = d
+      maxIndex = i
+    }
+  }
+
+  if (maxDist <= toleranceM) {
+    return [first, last]
+  }
+
+  const left = simplifyPolyline(points.slice(0, maxIndex + 1), toleranceM)
+  const right = simplifyPolyline(points.slice(maxIndex), toleranceM)
+  return [...left.slice(0, -1), ...right]
+}

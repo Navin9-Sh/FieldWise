@@ -1,22 +1,40 @@
+import { kinks, polygon as turfPolygon } from '@turf/turf'
 import { describe, expect, it } from 'vitest'
 import { createBoundary } from './boundary'
 import { acceptEdgeRisk, applyWalkedEdgeCorrection, DeltaError, revokeAcceptedRisk } from './delta'
 import { polygonAreaM2 } from './math'
+import { createLocalProjection, projectAll, unprojectAll } from './projection'
 import type { LatLng, LocalPoint } from './types'
 
-// delta.ts is coordinate-system agnostic — it never projects or measures
-// anything itself, it just splices points into a vertex ring. So these
-// tests treat LatLng's lon/lat fields as plain x/y meters, which keeps
-// the numbers easy to reason about without setting up a real projection.
-const square: LatLng[] = [
-  { lon: 0, lat: 0 },
-  { lon: 10, lat: 0 },
-  { lon: 10, lat: 10 },
-  { lon: 0, lat: 10 },
+// applyWalkedEdgeCorrection now needs a real LocalProjection (simplification
+// and the self-intersection check both run in real meters), so these
+// fixtures are defined in local meters for readability and then unprojected
+// to real lon/lat around a fixed origin — the same pattern the rest of the
+// codebase's test fixtures use (see e.g. lib/export/testFixtures.ts).
+const ORIGIN: LatLng = { lon: 75.75, lat: 30.35 }
+const projection = createLocalProjection(ORIGIN)
+
+// 100m x 100m square, bottom edge at y=-50.
+const SQUARE_LOCAL: LocalPoint[] = [
+  { x: -50, y: -50 },
+  { x: 50, y: -50 },
+  { x: 50, y: 50 },
+  { x: -50, y: 50 },
 ]
+const square: LatLng[] = unprojectAll(projection, SQUARE_LOCAL)
 
 function asLocal(vertices: LatLng[]): LocalPoint[] {
-  return vertices.map((v) => ({ x: v.lon, y: v.lat }))
+  return projectAll(projection, vertices)
+}
+
+function toLatLng(points: LocalPoint[]): LatLng[] {
+  return unprojectAll(projection, points)
+}
+
+function isValidSimplePolygon(vertices: LatLng[]): boolean {
+  const ring = asLocal(vertices).map((p): [number, number] => [p.x, p.y])
+  ring.push(ring[0])
+  return kinks(turfPolygon([ring])).features.length === 0
 }
 
 describe('applyWalkedEdgeCorrection', () => {
@@ -24,13 +42,13 @@ describe('applyWalkedEdgeCorrection', () => {
     const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
     const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
 
-    // A newly-planted strip below the satellite-drawn bottom edge (y=0 -> y=-2).
-    const walked: LatLng[] = [
-      { lon: 3, lat: -2 },
-      { lon: 7, lat: -2 },
-    ]
+    // A newly-planted strip below the satellite-drawn bottom edge (y=-50 -> y=-52).
+    const walked = toLatLng([
+      { x: -20, y: -52 },
+      { x: 20, y: -52 },
+    ])
 
-    const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3)
+    const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)
 
     const oldArea = polygonAreaM2(asLocal(boundary.vertices))
     const newArea = polygonAreaM2(asLocal(updated.vertices))
@@ -47,13 +65,13 @@ describe('applyWalkedEdgeCorrection', () => {
     const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
     const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
 
-    // The satellite overestimated the field — actual edge is 2m further in (y=0 -> y=2).
-    const walked: LatLng[] = [
-      { lon: 3, lat: 2 },
-      { lon: 7, lat: 2 },
-    ]
+    // The satellite overestimated the field — actual edge is 2m further in (y=-50 -> y=-48).
+    const walked = toLatLng([
+      { x: -20, y: -48 },
+      { x: 20, y: -48 },
+    ])
 
-    const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 4)
+    const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 4, projection)
 
     const oldArea = polygonAreaM2(asLocal(boundary.vertices))
     const newArea = polygonAreaM2(asLocal(updated.vertices))
@@ -65,7 +83,8 @@ describe('applyWalkedEdgeCorrection', () => {
     const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
     const otherEdges = boundary.edges.filter((e) => e.id !== bottomEdge.id)
 
-    const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, [{ lon: 5, lat: -1 }], 3)
+    const walked = toLatLng([{ x: 0, y: -51 }])
+    const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)
 
     for (const before of otherEdges) {
       const after = updated.edges.find((e) => e.id === before.id)
@@ -80,13 +99,14 @@ describe('applyWalkedEdgeCorrection', () => {
     const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
     const wrapEdge = boundary.edges.find((e) => e.fromIndex === 3 && e.toIndex === 0)!
 
-    const updated = applyWalkedEdgeCorrection(boundary, wrapEdge.id, [{ lon: -2, lat: 5 }], 3)
+    const walked = toLatLng([{ x: -52, y: 0 }])
+    const updated = applyWalkedEdgeCorrection(boundary, wrapEdge.id, walked, 3, projection)
 
-    // Original 4 vertices + 1 inserted; the untouched edges (indices 0,1,2 -> 1,2,3) still close the ring.
+    // Original 4 vertices + 1 inserted; the untouched edges still close the ring.
     expect(updated.vertices).toHaveLength(5)
     const newArea = polygonAreaM2(asLocal(updated.vertices))
     const oldArea = polygonAreaM2(asLocal(boundary.vertices))
-    expect(newArea).toBeGreaterThan(oldArea) // bulges outward past x=0
+    expect(newArea).toBeGreaterThan(oldArea) // bulges outward past x=-50
 
     // 3 untouched edges + 2 replacing the wrap edge (1 inserted point -> 2 edges).
     expect(updated.edges).toHaveLength(5)
@@ -94,12 +114,104 @@ describe('applyWalkedEdgeCorrection', () => {
 
   it('throws for an unknown edge id', () => {
     const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
-    expect(() => applyWalkedEdgeCorrection(boundary, 'nope', [{ lon: 1, lat: 1 }], 3)).toThrow(DeltaError)
+    const walked = toLatLng([{ x: 0, y: 0 }])
+    expect(() => applyWalkedEdgeCorrection(boundary, 'nope', walked, 3, projection)).toThrow(DeltaError)
   })
 
   it('throws when given an empty trace', () => {
     const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
-    expect(() => applyWalkedEdgeCorrection(boundary, boundary.edges[0].id, [], 3)).toThrow(DeltaError)
+    expect(() => applyWalkedEdgeCorrection(boundary, boundary.edges[0].id, [], 3, projection)).toThrow(DeltaError)
+  })
+
+  describe('trace simplification (the edge-count-explosion bug)', () => {
+    it('collapses a many-point GPS-style walk down to a small number of clean edges, not one edge per input point', () => {
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+
+      // Simulates a real trim: GPS sampled once a second over a ~15s walk
+      // along a roughly straight line 20m inside the original edge, with
+      // small (<1m) point-to-point jitter — exactly the shape a Web
+      // Serial-fed real GPS walk would produce. 15 points; the bug this
+      // fixes would have turned this into 15 tiny "walked" edges.
+      const rawTraceLocal: LocalPoint[] = Array.from({ length: 15 }, (_, i) => ({
+        x: -20 + i * 2.8, // spans ~-20 to ~19.2m
+        y: -30 + (i % 2 === 0 ? 0.4 : -0.4), // small jitter around y=-30
+      }))
+      const walked = toLatLng(rawTraceLocal)
+
+      const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)
+
+      const newEdges = updated.edges.filter((e) => e.id.startsWith(`${bottomEdge.id}-walk`))
+      expect(newEdges.length).toBeLessThan(rawTraceLocal.length)
+      expect(newEdges.length).toBeLessThanOrEqual(6)
+      expect(updated.edges.length).toBeLessThan(20) // vs. 154+ before the fix (3 untouched + 15 raw points -> 16 edges, times the boundary's real vertex count in the reported repro)
+    })
+
+    it('still trims correctly (loses area) after simplifying a many-point trace', () => {
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+
+      const rawTraceLocal: LocalPoint[] = Array.from({ length: 15 }, (_, i) => ({
+        x: -20 + i * 2.8,
+        y: -30 + (i % 2 === 0 ? 0.4 : -0.4),
+      }))
+      const walked = toLatLng(rawTraceLocal)
+
+      const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)
+
+      const oldArea = polygonAreaM2(asLocal(boundary.vertices))
+      const newArea = polygonAreaM2(asLocal(updated.vertices))
+      expect(newArea).toBeLessThan(oldArea) // trimmed inward, same as the un-simplified version would
+    })
+  })
+
+  describe('polygon validity (the self-intersection / stray-diagonal bug)', () => {
+    it('produces a valid, non-self-intersecting polygon after a normal trim', () => {
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+
+      const walked = toLatLng([
+        { x: -25, y: -30 },
+        { x: 0, y: -32 },
+        { x: 25, y: -30 },
+      ])
+      const updated = applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)
+
+      expect(isValidSimplePolygon(updated.vertices)).toBe(true)
+    })
+
+    it('rejects (throws DeltaError) a trace that crosses itself, instead of producing an invalid polygon', () => {
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+
+      // A bowtie: A -> B -> C -> D where segment A-B and segment C-D cross
+      // in the middle. Each point is >=20m from the line through its
+      // neighbors, so simplification can't (and shouldn't) simplify this
+      // away — it's a genuine self-crossing shape, not jitter noise.
+      const walked = toLatLng([
+        { x: -20, y: -10 }, // A
+        { x: 20, y: -30 }, // B
+        { x: -20, y: -30 }, // C
+        { x: 20, y: -10 }, // D
+      ])
+
+      expect(() => applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)).toThrow(DeltaError)
+    })
+
+    it('rejects a trace that would cross an untouched part of the boundary, not just itself', () => {
+      const boundary = createBoundary(square, 'satellite-trace', { imageryDate: '2024-01-01' })
+      const bottomEdge = boundary.edges.find((e) => e.fromIndex === 0 && e.toIndex === 1)!
+
+      // A single point far out past the square's right edge (x=50). The
+      // straight connector from the bottom-left anchor (-50,-50) to this
+      // point crosses the untouched right edge (the old (50,-50)-(50,50)
+      // segment, still part of the ring) at roughly (50, -8), well within
+      // that edge's span — a genuine crossing with a part of the boundary
+      // this correction never touched, not just a self-crossing trace.
+      const walked = toLatLng([{ x: 70, y: 0 }])
+
+      expect(() => applyWalkedEdgeCorrection(boundary, bottomEdge.id, walked, 3, projection)).toThrow(DeltaError)
+    })
   })
 })
 

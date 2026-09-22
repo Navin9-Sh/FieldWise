@@ -45,7 +45,17 @@ function App() {
   }
 
   const handleCorrectionFinish = (trace: LatLng[], accuracyM: number) => {
-    if (correctionTarget) walkEdge(correctionTarget.edgeId, trace, accuracyM)
+    if (!correctionTarget) return
+    try {
+      walkEdge(correctionTarget.edgeId, trace, accuracyM)
+    } catch (err) {
+      // A self-crossing (or otherwise invalid) trace is rejected rather
+      // than silently applied — keep the correction session open so the
+      // pilot can see why and walk it again, instead of losing their
+      // in-progress edge selection on a failed merge.
+      window.alert(err instanceof Error ? err.message : 'Could not apply that correction.')
+      return
+    }
     setCorrectionTarget(null)
   }
 

@@ -188,8 +188,11 @@ export const useFieldStore = create<FieldState>((set) => ({
 
   walkEdge: (edgeId, walkedPoints, accuracyM) =>
     set((state) => {
-      if (!state.boundary) return state
-      const boundary = applyWalkedEdgeCorrection(state.boundary, edgeId, walkedPoints, accuracyM)
+      if (!state.boundary || !state.projection) return state
+      // Lets a DeltaError (e.g. a self-crossing trace) propagate up to
+      // the caller rather than silently applying nothing — the pilot
+      // needs to know the correction was rejected and why.
+      const boundary = applyWalkedEdgeCorrection(state.boundary, edgeId, walkedPoints, accuracyM, state.projection)
       return { boundary, selectedEdgeId: null, ...recompute({ ...state, boundary }) }
     }),
 

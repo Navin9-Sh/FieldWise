@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { convexHull, distancePointToSegment, minTurnsHeadingRad, pointInPolygon, polygonAreaM2, scanlineSpans } from './math'
+import { convexHull, distancePointToSegment, minTurnsHeadingRad, pointInPolygon, polygonAreaM2, scanlineSpans, simplifyPolyline } from './math'
 import type { LocalPoint } from './types'
 
 describe('polygonAreaM2', () => {
@@ -172,5 +172,56 @@ describe('distancePointToSegment', () => {
 
   it('handles a degenerate zero-length segment as a point distance', () => {
     expect(distancePointToSegment({ x: 3, y: 4 }, { x: 0, y: 0 }, { x: 0, y: 0 })).toBeCloseTo(5, 9)
+  })
+})
+
+describe('simplifyPolyline', () => {
+  it('returns the input unchanged for 2 or fewer points', () => {
+    expect(simplifyPolyline([], 1)).toEqual([])
+    expect(simplifyPolyline([{ x: 0, y: 0 }], 1)).toEqual([{ x: 0, y: 0 }])
+    const twoPoints: LocalPoint[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }]
+    expect(simplifyPolyline(twoPoints, 1)).toEqual(twoPoints)
+  })
+
+  it('collapses a straight line with many collinear points down to just its two endpoints', () => {
+    const points: LocalPoint[] = Array.from({ length: 20 }, (_, i) => ({ x: i * 0.5, y: 0 }))
+    const result = simplifyPolyline(points, 0.5)
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual({ x: 0, y: 0 })
+    expect(result[result.length - 1]).toEqual({ x: 9.5, y: 0 })
+  })
+
+  it('drops small GPS-jitter-scale wobble within tolerance, keeping a near-straight walk as just its endpoints', () => {
+    // A realistic "Web Serial GPS sampled every second over a ~15s walk"
+    // shape: 16 points roughly along a line, each with a small (<1m)
+    // perpendicular wobble — should collapse to a small handful of
+    // points, never one edge per input point.
+    const points: LocalPoint[] = Array.from({ length: 16 }, (_, i) => ({
+      x: i * 1.4, // ~1.4 m/s walking pace, sampled once per second
+      y: (i % 2 === 0 ? 1 : -1) * 0.3, // +/-0.3m jitter, well under GPS accuracy
+    }))
+    const result = simplifyPolyline(points, 1.5)
+    expect(result.length).toBeLessThanOrEqual(5)
+    expect(result[0]).toEqual(points[0])
+    expect(result[result.length - 1]).toEqual(points[points.length - 1])
+  })
+
+  it('preserves a real corner beyond tolerance instead of cutting the shape', () => {
+    // An L-shape: a genuine ~5m sideways turn partway along, well beyond a 0.5m tolerance.
+    const points: LocalPoint[] = [
+      { x: 0, y: 0 },
+      { x: 5, y: 0 },
+      { x: 5, y: 5 },
+      { x: 10, y: 5 },
+    ]
+    const result = simplifyPolyline(points, 0.5)
+    expect(result).toContainEqual({ x: 5, y: 5 })
+    expect(result.length).toBeGreaterThan(2)
+  })
+
+  it('always keeps the first and last point regardless of tolerance', () => {
+    const points: LocalPoint[] = Array.from({ length: 30 }, (_, i) => ({ x: i, y: Math.sin(i) * 0.1 }))
+    const result = simplifyPolyline(points, 1000) // absurdly large tolerance — collapses everything else
+    expect(result).toEqual([points[0], points[points.length - 1]])
   })
 })
