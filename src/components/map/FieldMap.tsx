@@ -7,6 +7,7 @@ import {
 } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
+import { PhoneFrameOverlay } from '@/components/map/PhoneFrameOverlay'
 import { Button } from '@/components/ui/Button'
 import type { LocalProjection } from '@/lib/geo/projection'
 import { SAMPLE_FIELD_CENTER } from '@/lib/geo/sampleField'
@@ -800,6 +801,23 @@ export function FieldMap({
           </div>
         </div>
       )}
+
+      {correctionTarget && boundary && projection && pilotPosition && (() => {
+        const edge = boundary.edges.find((e) => e.id === correctionTarget.edgeId)
+        if (!edge) return null
+        return (
+          <PhoneFrameOverlay
+            mode={correctionTarget.mode}
+            edgeA={projection.toLocal(boundary.vertices[edge.fromIndex])}
+            edgeB={projection.toLocal(boundary.vertices[edge.toIndex])}
+            walkTraceLocal={walkTrace.map((p) => projection.toLocal(p))}
+            pilotPositionLocal={projection.toLocal(pilotPosition)}
+            accuracyM={accuracyM}
+            onFinish={() => onCorrectionFinish(walkTrace, accuracyM)}
+            onCancel={onCorrectionCancel}
+          />
+        )
+      })()}
 
       {cropRowTapActive && (
         <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-(--radius-card) border border-(--border-subtle) bg-(--surface-panel) px-4 py-2.5 shadow-(--shadow-panel)">
