@@ -17,4 +17,13 @@ export default defineConfig({
     // for USB Web Serial during recording.
     host: true,
   },
+  optimizeDeps: {
+    // maplibre-gl spins up its tile-processing work in a Worker created
+    // from a relative URL inside the package. Vite's esbuild dependency
+    // pre-bundling flattens/rewrites that path and breaks it (the worker
+    // 404s and every layer — raster tiles included — silently fails to
+    // render, with no thrown error). Excluding it from pre-bundling keeps
+    // the package's own file layout intact.
+    exclude: ['maplibre-gl'],
+  },
 })

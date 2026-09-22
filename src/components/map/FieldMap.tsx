@@ -1,0 +1,414 @@
+import {
+  GeoJSONSource,
+  Map as MapLibreMap,
+  MapMouseEvent,
+  NavigationControl,
+  type LngLatBoundsLike,
+} from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/Button'
+import type { LocalProjection } from '@/lib/geo/projection'
+import { SAMPLE_FIELD_CENTER } from '@/lib/geo/sampleField'
+import type { FieldBoundary, LatLng, NoSprayZone, SprayPlan } from '@/lib/geo/types'
+import { SATELLITE_STYLE } from '@/lib/map/basemap'
+import {
+  boundaryEdgesToFeatureCollection,
+  boundaryToPolygonFeature,
+  boundsOfLatLng,
+  EMPTY_FEATURE_COLLECTION,
+  latLngLineFeature,
+  latLngPointFeature,
+  sprayPlanToFeatureCollections,
+  zonesToFeatureCollection,
+} from '@/lib/map/geojson'
+import { PROVENANCE_COLORS } from '@/lib/map/provenanceColors'
+
+const SOURCE = {
+  boundaryFill: 'boundary-fill',
+  boundaryEdges: 'boundary-edges',
+  zones: 'zones',
+  sprayLines: 'spray-lines',
+  transitLines: 'transit-lines',
+  homePoint: 'home-point',
+  drawProgress: 'draw-progress',
+  drawProgressPoints: 'draw-progress-points',
+} as const
+
+export type DrawTarget = 'boundary' | 'zone' | null
+
+interface FieldMapProps {
+  boundary: FieldBoundary | null
+  noSprayZones: NoSprayZone[]
+  sprayPlan: SprayPlan | null
+  projection: LocalProjection | null
+  selectedEdgeId: string | null
+  onSelectEdge: (edgeId: string | null) => void
+  showEdges: boolean
+  showZones: boolean
+  showPlan: boolean
+  drawTarget: DrawTarget
+  onDrawFinish: (vertices: LatLng[]) => void
+  onDrawCancel: () => void
+  /** In-progress GPS walk points (real or simulated), drawn the same way as a click-drawn polygon. */
+  liveWalkPath?: LatLng[]
+}
+
+function setData(map: MapLibreMap, sourceId: string, data: GeoJSON.GeoJSON) {
+  const source = map.getSource(sourceId) as GeoJSONSource | undefined
+  source?.setData(data)
+}
+
+export function FieldMap({
+  boundary,
+  noSprayZones,
+  sprayPlan,
+  projection,
+  selectedEdgeId,
+  onSelectEdge,
+  showEdges,
+  showZones,
+  showPlan,
+  drawTarget,
+  onDrawFinish,
+  onDrawCancel,
+  liveWalkPath = [],
+}: FieldMapProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<MapLibreMap | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [drawVertices, setDrawVertices] = useState<LatLng[]>([])
+  const lastFittedBoundaryId = useRef<string | null>(null)
+
+  // Refs so the map's event handlers (registered once) always see the
+  // latest callback/props without needing to be re-registered.
+  const drawTargetRef = useRef(drawTarget)
+  drawTargetRef.current = drawTarget
+  const showEdgesRef = useRef(showEdges)
+  showEdgesRef.current = showEdges
+  const onSelectEdgeRef = useRef(onSelectEdge)
+  onSelectEdgeRef.current = onSelectEdge
+
+  // Drawing is reset whenever the target changes (including turning off).
+  useEffect(() => {
+    setDrawVertices([])
+  }, [drawTarget])
+
+  // ---- Map lifecycle -----------------------------------------------
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const map = new MapLibreMap({
+      container: containerRef.current,
+      style: SATELLITE_STYLE,
+      center: [SAMPLE_FIELD_CENTER.lon, SAMPLE_FIELD_CENTER.lat],
+      zoom: 16.5,
+      attributionControl: { compact: true },
+    })
+    mapRef.current = map
+
+    map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+
+    map.on('load', () => {
+      map.addSource(SOURCE.boundaryFill, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'boundary-fill-layer',
+        type: 'fill',
+        source: SOURCE.boundaryFill,
+        paint: { 'fill-color': '#279d82', 'fill-opacity': 0.12 },
+      })
+
+      map.addSource(SOURCE.boundaryEdges, {
+        type: 'geojson',
+        data: EMPTY_FEATURE_COLLECTION,
+        promoteId: 'edgeId',
+      })
+      // Wide, invisible line purely for generous click/hover hit-testing.
+      map.addLayer({
+        id: 'boundary-edges-hit',
+        type: 'line',
+        source: SOURCE.boundaryEdges,
+        paint: { 'line-width': 18, 'line-opacity': 0 },
+      })
+      // Selection halo, drawn under the colored edges.
+      map.addLayer({
+        id: 'boundary-edges-selection',
+        type: 'line',
+        source: SOURCE.boundaryEdges,
+        layout: { 'line-cap': 'round' },
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 9,
+          'line-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 0.9, 0],
+        },
+      })
+      // Verified edges (walked/confirmed) — solid.
+      map.addLayer({
+        id: 'boundary-edges-verified',
+        type: 'line',
+        source: SOURCE.boundaryEdges,
+        filter: ['!=', ['get', 'provenance'], 'satellite'],
+        layout: { 'line-cap': 'round' },
+        paint: {
+          'line-color': [
+            'match',
+            ['get', 'provenance'],
+            'walked',
+            PROVENANCE_COLORS.walked,
+            'confirmed',
+            PROVENANCE_COLORS.confirmed,
+            PROVENANCE_COLORS.confirmed,
+          ],
+          'line-width': 4,
+        },
+      })
+      // Unverified (satellite prior) edges — dashed amber, the twist's core visual.
+      map.addLayer({
+        id: 'boundary-edges-unverified',
+        type: 'line',
+        source: SOURCE.boundaryEdges,
+        filter: ['==', ['get', 'provenance'], 'satellite'],
+        layout: { 'line-cap': 'round' },
+        paint: {
+          'line-color': PROVENANCE_COLORS.satellite,
+          'line-width': 4,
+          'line-dasharray': [2, 1.6],
+        },
+      })
+
+      map.addSource(SOURCE.zones, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'zones-fill',
+        type: 'fill',
+        source: SOURCE.zones,
+        paint: { 'fill-color': '#dc2626', 'fill-opacity': 0.25 },
+      })
+      map.addLayer({
+        id: 'zones-outline',
+        type: 'line',
+        source: SOURCE.zones,
+        paint: { 'line-color': '#dc2626', 'line-width': 2, 'line-dasharray': [1, 1] },
+      })
+
+      // Spray plan: spraying legs solid, transit legs dashed — kept as
+      // two separate layers/sources rather than one data-driven layer
+      // because line-dasharray isn't a data-expression-safe paint
+      // property, and because "solid vs dashed" needs to stay
+      // unambiguous at a glance during the demo.
+      map.addSource(SOURCE.sprayLines, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'spray-lines-layer',
+        type: 'line',
+        source: SOURCE.sprayLines,
+        layout: { 'line-cap': 'round' },
+        paint: { 'line-color': '#1a7e69', 'line-width': 2.5 },
+      })
+      map.addSource(SOURCE.transitLines, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'transit-lines-layer',
+        type: 'line',
+        source: SOURCE.transitLines,
+        paint: { 'line-color': '#8691a2', 'line-width': 1.5, 'line-dasharray': [1.5, 1.5] },
+      })
+
+      map.addSource(SOURCE.homePoint, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'home-point-layer',
+        type: 'circle',
+        source: SOURCE.homePoint,
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#ffffff',
+          'circle-stroke-color': '#164f46',
+          'circle-stroke-width': 3,
+        },
+      })
+
+      // In-progress drawing (click-to-add or live GPS walk).
+      map.addSource(SOURCE.drawProgress, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'draw-progress-line',
+        type: 'line',
+        source: SOURCE.drawProgress,
+        paint: { 'line-color': '#2563eb', 'line-width': 3, 'line-dasharray': [1, 1] },
+      })
+      map.addSource(SOURCE.drawProgressPoints, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: 'draw-progress-points-layer',
+        type: 'circle',
+        source: SOURCE.drawProgressPoints,
+        paint: { 'circle-radius': 5, 'circle-color': '#2563eb', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
+      })
+
+      setLoaded(true)
+      // Safety net: containers inside flex layouts sometimes report zero
+      // size on first paint, before layout settles.
+      requestAnimationFrame(() => map.resize())
+    })
+
+    map.on('click', (e: MapMouseEvent) => {
+      if (drawTargetRef.current) {
+        setDrawVertices((prev) => [...prev, { lon: e.lngLat.lng, lat: e.lngLat.lat }])
+        return
+      }
+      if (!showEdgesRef.current) return
+      const features = map.queryRenderedFeatures(e.point, { layers: ['boundary-edges-hit'] })
+      const edgeId = features[0]?.properties?.edgeId as string | undefined
+      onSelectEdgeRef.current(edgeId ?? null)
+    })
+
+    map.on('mouseenter', 'boundary-edges-hit', () => {
+      if (!drawTargetRef.current) map.getCanvas().style.cursor = 'pointer'
+    })
+    map.on('mouseleave', 'boundary-edges-hit', () => {
+      if (!drawTargetRef.current) map.getCanvas().style.cursor = ''
+    })
+
+    return () => {
+      map.remove()
+      mapRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-time map init; live values flow in via refs/effects below
+  }, [])
+
+  // Drawing cursor
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    map.getCanvas().style.cursor = drawTarget ? 'crosshair' : ''
+  }, [drawTarget])
+
+  // ---- Data sync effects ---------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+
+    if (boundary) {
+      setData(map, SOURCE.boundaryFill, boundaryToPolygonFeature(boundary))
+      setData(map, SOURCE.boundaryEdges, boundaryEdgesToFeatureCollection(boundary))
+
+      if (lastFittedBoundaryId.current !== boundary.id) {
+        lastFittedBoundaryId.current = boundary.id
+        const bounds = boundsOfLatLng(boundary.vertices) as LngLatBoundsLike
+        map.fitBounds(bounds, { padding: 64, duration: 600 })
+      }
+    } else {
+      setData(map, SOURCE.boundaryFill, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.boundaryEdges, EMPTY_FEATURE_COLLECTION)
+      lastFittedBoundaryId.current = null
+    }
+  }, [boundary, loaded])
+
+  // Selection highlight (feature-state), independent of the data refresh above.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded || !boundary) return
+    for (const edge of boundary.edges) {
+      map.setFeatureState({ source: SOURCE.boundaryEdges, id: edge.id }, { selected: edge.id === selectedEdgeId })
+    }
+  }, [selectedEdgeId, boundary, loaded])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+    setData(map, SOURCE.zones, zonesToFeatureCollection(noSprayZones))
+  }, [noSprayZones, loaded])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+
+    if (sprayPlan && projection && sprayPlan.sorties.length > 0) {
+      const { spray, transit } = sprayPlanToFeatureCollections(sprayPlan, projection)
+      setData(map, SOURCE.sprayLines, spray)
+      setData(map, SOURCE.transitLines, transit)
+    } else {
+      setData(map, SOURCE.sprayLines, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.transitLines, EMPTY_FEATURE_COLLECTION)
+    }
+
+    if (boundary && sprayPlan && sprayPlan.sorties.length > 0) {
+      setData(map, SOURCE.homePoint, latLngPointFeature(boundary.vertices[0]))
+    } else {
+      setData(map, SOURCE.homePoint, EMPTY_FEATURE_COLLECTION)
+    }
+  }, [sprayPlan, projection, boundary, loaded])
+
+  // Layer visibility toggles.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+    const vis = (v: boolean) => (v ? 'visible' : 'none')
+    for (const id of ['boundary-edges-hit', 'boundary-edges-selection', 'boundary-edges-verified', 'boundary-edges-unverified']) {
+      map.setLayoutProperty(id, 'visibility', vis(showEdges))
+    }
+  }, [showEdges, loaded])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+    const vis = (v: boolean) => (v ? 'visible' : 'none')
+    map.setLayoutProperty('zones-fill', 'visibility', vis(showZones))
+    map.setLayoutProperty('zones-outline', 'visibility', vis(showZones))
+  }, [showZones, loaded])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+    const vis = (v: boolean) => (v ? 'visible' : 'none')
+    for (const id of ['spray-lines-layer', 'transit-lines-layer', 'home-point-layer']) {
+      map.setLayoutProperty(id, 'visibility', vis(showPlan))
+    }
+  }, [showPlan, loaded])
+
+  // In-progress draw / live walk visualization — whichever is active.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+    const points = drawTarget ? drawVertices : liveWalkPath
+
+    if (points.length === 0) {
+      setData(map, SOURCE.drawProgress, EMPTY_FEATURE_COLLECTION)
+      setData(map, SOURCE.drawProgressPoints, EMPTY_FEATURE_COLLECTION)
+      return
+    }
+
+    const closed = points.length >= 3 ? [...points, points[0]] : points
+    setData(map, SOURCE.drawProgress, latLngLineFeature(closed))
+    setData(map, SOURCE.drawProgressPoints, {
+      type: 'FeatureCollection',
+      features: points.map((p) => latLngPointFeature(p)),
+    })
+  }, [drawVertices, liveWalkPath, drawTarget, loaded])
+
+  return (
+    <div className="relative h-full w-full">
+      <div ref={containerRef} className="h-full w-full" />
+
+      {drawTarget && (
+        <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-(--radius-card) border border-(--border-subtle) bg-(--surface-panel) px-4 py-2.5 shadow-(--shadow-panel)">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-(--text-primary)">
+              Click the map to add points
+              {drawVertices.length > 0 && <span className="text-(--text-muted)"> · {drawVertices.length} so far</span>}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={drawVertices.length === 0}
+              onClick={() => setDrawVertices((prev) => prev.slice(0, -1))}
+            >
+              Undo
+            </Button>
+            <Button size="sm" variant="secondary" onClick={onDrawCancel}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="primary" disabled={drawVertices.length < 3} onClick={() => onDrawFinish(drawVertices)}>
+              Finish ({drawVertices.length})
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
