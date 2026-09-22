@@ -121,7 +121,7 @@ export function ExportPanel() {
           type="text"
           value={fieldName}
           onChange={(e) => setFieldName(e.target.value)}
-          className="rounded-(--radius-control) border border-(--border-subtle) bg-(--surface-panel) px-2.5 py-1.5 text-sm text-(--text-primary)"
+          className="rounded-(--radius-control) border border-(--border-subtle) bg-(--surface-panel) px-2.5 py-1.5 text-sm text-(--text-primary) transition-colors focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
         />
       </label>
 

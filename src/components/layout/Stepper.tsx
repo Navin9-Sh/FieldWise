@@ -34,13 +34,19 @@ export function Stepper({ current, unlocked, onSelect }: StepperProps) {
             >
               <span
                 className={clsx(
-                  'flex h-5 w-5 items-center justify-center rounded-full text-xs font-semibold',
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors',
                   isCurrent && 'bg-white/20 text-white',
                   !isCurrent && isDone && 'bg-brand-100 text-brand-700',
                   !isCurrent && !isDone && 'bg-(--surface-panel-raised) text-(--text-muted)',
                 )}
               >
-                {i + 1}
+                {!isCurrent && isDone ? (
+                  <svg viewBox="0 0 16 16" fill="none" className="h-3 w-3" aria-hidden="true">
+                    <path d="M4 8.3 6.6 10.9 12 5.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : (
+                  i + 1
+                )}
               </span>
               {STEP_LABELS[step]}
             </button>

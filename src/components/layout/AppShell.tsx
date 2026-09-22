@@ -43,7 +43,7 @@ export function AppShell({ children }: AppShellProps) {
 
         <Stepper current={currentStep} unlocked={unlocked} onSelect={setStep} />
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2.5">
           <RecomputeTimingBadge lastRecomputeMs={lastRecomputeMs} />
           <ReadinessBadge readiness={readiness} />
         </div>

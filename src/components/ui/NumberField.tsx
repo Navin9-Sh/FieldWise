@@ -47,7 +47,7 @@ export function NumberField({ label, unit, value, min = 0.01, step = 0.1, onChan
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
-          className="w-full rounded-(--radius-control) border border-(--border-subtle) bg-(--surface-panel) px-2 py-1 text-sm tabular-nums"
+          className="w-full rounded-(--radius-control) border border-(--border-subtle) bg-(--surface-panel) px-2 py-1 text-sm tabular-nums transition-colors focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
         />
         <span className="text-(--text-muted)">{unit}</span>
       </div>

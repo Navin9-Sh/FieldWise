@@ -32,6 +32,8 @@ export function VerifyPanel({ correctionTarget, onStartWalkStrip, onStartTrimEdg
   }
 
   const selectedEdge = boundary.edges.find((e) => e.id === selectedEdgeId) ?? null
+  // Display-only — matches the "Edge N" numbering the list above already uses, rather than leaking the raw internal edge id (e.g. "e0") into the UI.
+  const selectedEdgeNumber = selectedEdge ? boundary.edges.indexOf(selectedEdge) + 1 : null
   const correctionActiveHere = correctionTarget !== null
 
   return (
@@ -118,7 +120,7 @@ export function VerifyPanel({ correctionTarget, onStartWalkStrip, onStartTrimEdg
         <section className="space-y-2 rounded-(--radius-card) border border-brand-200 bg-brand-50 p-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-700">Selected edge</h3>
           <div className="text-sm text-(--text-primary)">
-            {selectedEdge.id} — <ProvenanceBadge kind={selectedEdge.provenance.kind} acceptedRisk={selectedEdge.provenance.acceptedRisk} className="ml-1" />
+            Edge {selectedEdgeNumber} — <ProvenanceBadge kind={selectedEdge.provenance.kind} acceptedRisk={selectedEdge.provenance.acceptedRisk} className="ml-1" />
           </div>
           {selectedEdge.provenance.kind === 'satellite' && selectedEdge.provenance.imageryDate && (
             <div className="text-xs text-(--text-secondary)">Imagery date: {selectedEdge.provenance.imageryDate}</div>

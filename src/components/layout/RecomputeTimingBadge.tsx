@@ -13,8 +13,10 @@ export function RecomputeTimingBadge({ lastRecomputeMs }: RecomputeTimingBadgePr
   if (lastRecomputeMs === null) return null
 
   return (
-    <div className="flex items-center gap-1.5 rounded-full border border-(--border-subtle) bg-(--surface-panel) px-2.5 py-1 text-xs text-(--text-muted)" title="Time to recompute the spray plan + readiness after the last change">
-      <span aria-hidden="true">⚡</span>
+    <div className="flex items-center gap-1.5 whitespace-nowrap rounded-full border border-(--border-subtle) bg-(--surface-panel) px-2.5 py-1 text-xs text-(--text-muted)" title="Time to recompute the spray plan + readiness after the last change">
+      <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3 shrink-0 text-brand-500" aria-hidden="true">
+        <path d="M8.6 1 3 9h3.6l-.9 6L13 7H9.4l.9-6Z" />
+      </svg>
       Re-planned in {lastRecomputeMs.toFixed(1)}ms
     </div>
   )

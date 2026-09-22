@@ -73,17 +73,19 @@ export function PlanPanel({ cropRowTapActive, onStartCropRowTap, onCancelCropRow
       <section className="space-y-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-(--text-muted)">Sweep heading</h3>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-sm text-(--text-primary)">
+          <label className="flex cursor-pointer items-center gap-1.5 text-sm text-(--text-primary)">
             <input
               type="radio"
+              className="h-3.5 w-3.5 accent-brand-600"
               checked={sweepStrategy.kind === 'min-turns'}
               onChange={() => setSweepStrategy({ kind: 'min-turns' })}
             />
             Auto (min-turns)
           </label>
-          <label className="flex items-center gap-1.5 text-sm text-(--text-primary)">
+          <label className="flex cursor-pointer items-center gap-1.5 text-sm text-(--text-primary)">
             <input
               type="radio"
+              className="h-3.5 w-3.5 accent-brand-600"
               checked={isFixedOrCropRow}
               onChange={() => setSweepStrategy({ kind: 'fixed-heading', headingDeg: Number(headingInput) || 0 })}
             />
@@ -94,7 +96,7 @@ export function PlanPanel({ cropRowTapActive, onStartCropRowTap, onCancelCropRow
           <div className="flex items-center gap-2">
             <input
               type="number"
-              className="w-24 rounded-(--radius-control) border border-(--border-subtle) bg-(--surface-panel) px-2 py-1 text-sm"
+              className="w-24 rounded-(--radius-control) border border-(--border-subtle) bg-(--surface-panel) px-2 py-1 text-sm transition-colors focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
               value={headingInput}
               onChange={(e) => {
                 setHeadingInput(e.target.value)

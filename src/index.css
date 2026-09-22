@@ -70,7 +70,14 @@
   color-scheme: light;
   --surface-app: var(--color-ink-50);
   --surface-panel: #ffffff;
-  --surface-panel-raised: #ffffff;
+  /* Distinct from BOTH --surface-panel (white cards/buttons) and
+     --surface-app (the ink-50 sidebar backdrop those cards sit on) on
+     purpose: every hover:bg-(--surface-panel-raised) across the app
+     (buttons, stepper, edge rows) relies on this actually reading as a
+     lift, not a sink back into the backdrop. It was previously #ffffff,
+     identical to --surface-panel, which made those hover states
+     invisible in light mode. */
+  --surface-panel-raised: var(--color-ink-100);
   --border-subtle: var(--color-ink-200);
   --text-primary: var(--color-ink-900);
   --text-secondary: var(--color-ink-600);
