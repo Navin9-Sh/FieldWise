@@ -12,7 +12,8 @@ import { Button } from '@/components/ui/Button'
 import type { LocalProjection } from '@/lib/geo/projection'
 import { SAMPLE_FIELD_CENTER } from '@/lib/geo/sampleField'
 import type { FieldBoundary, LatLng, NoSprayZone, SprayPlan } from '@/lib/geo/types'
-import { SATELLITE_STYLE } from '@/lib/map/basemap'
+import { SATELLITE_LAYER_ID, SATELLITE_SOURCE_ID, SATELLITE_STYLE } from '@/lib/map/basemap'
+import { onTileSourceStatusChange, registerResilientSatelliteProtocol, retryTileSource } from '@/lib/map/resilientSatelliteTiles'
 import {
   accuracyCircleFeature,
   boundaryEdgesToFeatureCollection,
@@ -28,6 +29,12 @@ import {
 } from '@/lib/map/geojson'
 import { PROVENANCE_COLORS } from '@/lib/map/provenanceColors'
 import type { ReplayHeatmap } from '@/lib/simulation/replay'
+
+// Registered once at module load, before any Map instance requests a
+// tile — MapLibre resolves the fwsat:// scheme lazily on first use, but
+// registering it eagerly here means it's never a race against the
+// map's own initial tile requests.
+registerResilientSatelliteProtocol()
 
 const SOURCE = {
   boundaryFill: 'boundary-fill',
@@ -162,6 +169,7 @@ export function FieldMap({
   const [loaded, setLoaded] = useState(false)
   const [drawVertices, setDrawVertices] = useState<LatLng[]>([])
   const lastFittedBoundaryId = useRef<string | null>(null)
+  const [usingFallbackTiles, setUsingFallbackTiles] = useState(false)
 
   // Correction (walk-strip / trim-edge) drag session state.
   const [walkTrace, setWalkTrace] = useState<LatLng[]>([])
@@ -195,6 +203,13 @@ export function FieldMap({
   useEffect(() => {
     setDrawVertices([])
   }, [drawTarget])
+
+  // Tracks whether any currently-loaded satellite tile actually came
+  // from the backup provider (see resilientSatelliteTiles.ts) — drives
+  // the "showing backup map" banner below.
+  useEffect(() => {
+    return onTileSourceStatusChange((status) => setUsingFallbackTiles(status.usingFallback))
+  }, [])
 
   // Crop-row tap points reset whenever the mode toggles.
   useEffect(() => {
@@ -780,6 +795,28 @@ export function FieldMap({
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
+
+      {usingFallbackTiles && (
+        <div className="pointer-events-none absolute left-1/2 top-4 z-30 -translate-x-1/2">
+          <div className="pointer-events-auto flex items-center gap-2.5 rounded-(--radius-card) border border-warning/30 bg-warning-bg px-3.5 py-2 text-xs text-warning shadow-(--shadow-panel)">
+            <svg viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
+              <circle cx="8" cy="8" r="7" fill="currentColor" fillOpacity="0.15" />
+              <path d="M8 5v3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              <circle cx="8" cy="11" r="0.9" fill="currentColor" />
+            </svg>
+            <span className="font-medium">
+              Satellite imagery had trouble loading — some tiles are showing a backup map instead.
+            </span>
+            <button
+              type="button"
+              onClick={() => mapRef.current && retryTileSource(mapRef.current, SATELLITE_SOURCE_ID, SATELLITE_LAYER_ID)}
+              className="shrink-0 rounded-full border border-warning/40 bg-white/60 px-2.5 py-1 font-medium text-warning transition-colors hover:bg-white"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
 
       {showGetStarted && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
