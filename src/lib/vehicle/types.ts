@@ -30,6 +30,30 @@ export interface VehicleTelemetry {
     pitchDeg: number
     yawDeg: number
   } | null
+  /** From HEARTBEAT — the vehicle's own top-level status (MAV_STATE), independent of flight mode. Null until the first heartbeat arrives. */
+  systemStatus: string | null
+  /** From HEARTBEAT.custom_mode — ArduCopter mode name (see ARDUCOPTER_MODE_LABELS). Null until the first heartbeat arrives, or if custom_mode isn't enabled/recognized. */
+  flightMode: string | null
+  /** From SYS_STATUS — null until that message has been seen at least once (it's not sent on every heartbeat cycle by every autopilot). */
+  battery: {
+    voltageV: number | null
+    /** -1 (MAVLink's "unknown" sentinel) is normalized to null here rather than displayed as -1%. */
+    remainingPct: number | null
+  } | null
+  /** From VFR_HUD.alt — relative-to-home altitude, meters. Null until that message has been seen. */
+  altitudeM: number | null
+  /** From VFR_HUD.heading — compass heading, degrees. Null until that message has been seen. */
+  headingDeg: number | null
+  /**
+   * From the ArduPilot-legacy WIND message — not part of the shared
+   * `common` dialect, and not every ArduCopter configuration emits it.
+   * Stays null for the whole session on vehicles that never send it,
+   * same as a genuinely-absent HDOP does — never invented.
+   */
+  wind: {
+    speedMps: number
+    directionDeg: number
+  } | null
 }
 
 export const EMPTY_TELEMETRY: VehicleTelemetry = {
@@ -37,6 +61,12 @@ export const EMPTY_TELEMETRY: VehicleTelemetry = {
   heartbeatAgeMs: null,
   gps: { fixType: 'unknown', satellites: null, hdop: null, position: null },
   attitude: null,
+  systemStatus: null,
+  flightMode: null,
+  battery: null,
+  altitudeM: null,
+  headingDeg: null,
+  wind: null,
 }
 
 /** One mission waypoint, in the vehicle-native form (MAV_CMD + a position). Altitude is relative-to-home, meters. */

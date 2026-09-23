@@ -44,6 +44,27 @@ function AttitudeIndicator({ rollDeg, pitchDeg }: { rollDeg: number; pitchDeg: n
   )
 }
 
+/** AeroGCS Green's "Head Direction" widget — a compass dial rotated by VFR_HUD.heading. Real MAVLink data, not simulated. */
+function HeadingCompass({ headingDeg }: { headingDeg: number }) {
+  return (
+    <div className="relative h-20 w-20 shrink-0 rounded-full border-2 border-(--border-subtle) bg-ink-100">
+      <div className="absolute inset-0 flex items-center justify-center text-[9px] font-medium text-(--text-muted)">
+        <span className="absolute top-1">N</span>
+        <span className="absolute bottom-1">S</span>
+        <span className="absolute left-1">W</span>
+        <span className="absolute right-1">E</span>
+      </div>
+      <div className="absolute inset-0 transition-transform" style={{ transform: `rotate(${headingDeg}deg)` }}>
+        <div className="absolute left-1/2 top-2 h-6 w-0 -translate-x-1/2 border-l-2 border-danger" />
+      </div>
+      <div className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-(--text-primary)" />
+      <div className="absolute bottom-0.5 left-1/2 -translate-x-1/2 text-[9px] font-semibold tabular-nums text-(--text-primary)">
+        {Math.round(headingDeg)}°
+      </div>
+    </div>
+  )
+}
+
 export function SendPanel() {
   const boundary = useFieldStore((s) => s.boundary)
   const sprayPlan = useFieldStore((s) => s.sprayPlan)
@@ -70,6 +91,22 @@ export function SendPanel() {
       void vehicle.disconnect() // don't leave a serial port open if the pilot navigates away from this step
     }
   }, [vehicle])
+
+  // Dev-only debug hook (never ships in production builds, same pattern
+  // as FieldMap's __fieldwiseMap) — lets a browser-driven verification
+  // script render the live-telemetry widgets without real Pixhawk
+  // hardware, which Web Serial has no way to fake from outside the
+  // browser.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as { __fieldwiseSeedTelemetry?: (t: Partial<VehicleTelemetry>, connected?: boolean) => void }).__fieldwiseSeedTelemetry = (
+      partial,
+      connected = true,
+    ) => {
+      setTelemetry((prev) => ({ ...prev, ...partial }))
+      if (connected) setConnectionState('connected')
+    }
+  }, [])
 
   if (!boundary || !sprayPlan) {
     return <div className="p-4 text-sm text-(--text-secondary)">No plan yet — go back to Plan.</div>
@@ -136,6 +173,25 @@ export function SendPanel() {
       {connectionState === 'connected' && (
         <section className="space-y-2 rounded-(--radius-card) border border-(--border-subtle) bg-(--surface-panel) p-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-(--text-muted)">Live telemetry</h3>
+
+          {(telemetry.flightMode !== null || telemetry.systemStatus !== null) && (
+            <div className="flex items-center gap-1.5">
+              {telemetry.flightMode !== null && (
+                <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">{telemetry.flightMode}</span>
+              )}
+              {telemetry.systemStatus !== null && (
+                <span
+                  className={clsx(
+                    'rounded-full px-2 py-0.5 text-xs font-medium',
+                    telemetry.systemStatus === 'active' ? 'bg-success-bg text-success' : 'bg-(--surface-panel-raised) text-(--text-secondary)',
+                  )}
+                >
+                  {telemetry.systemStatus}
+                </span>
+              )}
+            </div>
+          )}
+
           <div className="flex items-center gap-3">
             {telemetry.attitude ? (
               <AttitudeIndicator rollDeg={telemetry.attitude.rollDeg} pitchDeg={telemetry.attitude.pitchDeg} />
@@ -144,6 +200,7 @@ export function SendPanel() {
                 no attitude
               </div>
             )}
+            {telemetry.headingDeg !== null && <HeadingCompass headingDeg={telemetry.headingDeg} />}
             <div className="grid flex-1 grid-cols-2 gap-2">
               <StatCard
                 label="GPS fix"
@@ -159,6 +216,23 @@ export function SendPanel() {
               )}
             </div>
           </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <StatCard
+              label="Battery"
+              value={telemetry.battery?.voltageV !== null && telemetry.battery?.voltageV !== undefined ? telemetry.battery.voltageV.toFixed(1) : '—'}
+              unit="V"
+              hint={telemetry.battery?.remainingPct !== null && telemetry.battery?.remainingPct !== undefined ? `${telemetry.battery.remainingPct}% remaining` : undefined}
+            />
+            <StatCard label="Altitude" value={telemetry.altitudeM !== null ? telemetry.altitudeM.toFixed(1) : '—'} unit="m AGL" />
+            <StatCard
+              label="Wind"
+              value={telemetry.wind ? telemetry.wind.speedMps.toFixed(1) : '—'}
+              unit={telemetry.wind ? 'm/s' : undefined}
+              hint={telemetry.wind ? `from ${Math.round(telemetry.wind.directionDeg)}°` : 'not sent by this vehicle'}
+            />
+          </div>
+
           {telemetry.gps.position && (
             <div className="text-xs text-(--text-secondary)">
               {telemetry.gps.position.lat.toFixed(6)}, {telemetry.gps.position.lon.toFixed(6)}

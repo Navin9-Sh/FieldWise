@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { decodeMessagePayload, encodeFrame, encodeMessagePayload, MavlinkFrameReader } from './codec'
-import { ATTITUDE, GLOBAL_POSITION_INT, GPS_RAW_INT, HEARTBEAT, MISSION_ITEM_INT } from './messages'
+import { ATTITUDE, GLOBAL_POSITION_INT, GPS_RAW_INT, HEARTBEAT, MISSION_ITEM_INT, SYS_STATUS, VFR_HUD, WIND } from './messages'
 
 const OPTS = { sysid: 255, compid: 190, seq: 0 }
 
@@ -32,6 +32,67 @@ describe('encodeMessagePayload / decodeMessagePayload round-trip', () => {
     const values = { timeUsec: 1_700_000_000_000, lat: 0, lon: 0, alt: 0, eph: 0, epv: 0, vel: 0, cog: 0, fixType: 3, satellitesVisible: 12 }
     const payload = encodeMessagePayload(GPS_RAW_INT, values)
     expect(decodeMessagePayload(GPS_RAW_INT, payload).timeUsec).toBe(values.timeUsec)
+  })
+
+  it('round-trips SYS_STATUS, including a negative int8 (battery_remaining = -1, the "unknown" sentinel)', () => {
+    const values = {
+      onboardControlSensorsPresent: 0,
+      onboardControlSensorsEnabled: 0,
+      onboardControlSensorsHealth: 0,
+      load: 300,
+      voltageBattery: 12600, // 12.6V, in mV as MAVLink reports it
+      currentBattery: -1, // "unknown" sentinel, same convention as batteryRemaining below
+      dropRateComm: 0,
+      errorsComm: 0,
+      errorsCount1: 0,
+      errorsCount2: 0,
+      errorsCount3: 0,
+      errorsCount4: 0,
+      batteryRemaining: -1,
+    }
+    const payload = encodeMessagePayload(SYS_STATUS, values)
+    expect(payload).toHaveLength(SYS_STATUS.payloadLength)
+    expect(decodeMessagePayload(SYS_STATUS, payload)).toEqual(values)
+  })
+
+  it('round-trips a real (non-sentinel) SYS_STATUS battery reading', () => {
+    const values = {
+      onboardControlSensorsPresent: 0,
+      onboardControlSensorsEnabled: 0,
+      onboardControlSensorsHealth: 0,
+      load: 150,
+      voltageBattery: 11100,
+      currentBattery: 850,
+      dropRateComm: 0,
+      errorsComm: 0,
+      errorsCount1: 0,
+      errorsCount2: 0,
+      errorsCount3: 0,
+      errorsCount4: 0,
+      batteryRemaining: 62,
+    }
+    const payload = encodeMessagePayload(SYS_STATUS, values)
+    expect(decodeMessagePayload(SYS_STATUS, payload)).toEqual(values)
+  })
+
+  it('round-trips VFR_HUD (altitude + heading in one message)', () => {
+    const values = { airspeed: 0, groundspeed: 4.5, alt: 87.3, climb: 0.2, heading: 271, throttle: 45 }
+    const payload = encodeMessagePayload(VFR_HUD, values)
+    const decoded = decodeMessagePayload(VFR_HUD, payload)
+    expect(decoded.alt).toBeCloseTo(values.alt, 4)
+    expect(decoded.groundspeed).toBeCloseTo(values.groundspeed, 4)
+    expect(decoded.climb).toBeCloseTo(values.climb, 4)
+    expect(decoded.heading).toBe(values.heading)
+    expect(decoded.throttle).toBe(values.throttle)
+  })
+
+  it('round-trips WIND', () => {
+    const values = { direction: 214.5, speed: 3.2, speedZ: 0.1 }
+    const payload = encodeMessagePayload(WIND, values)
+    const decoded = decodeMessagePayload(WIND, payload)
+    expect(decoded.direction).toBeCloseTo(values.direction, 4)
+    expect(decoded.speed).toBeCloseTo(values.speed, 4)
+    expect(decoded.speedZ).toBeCloseTo(values.speedZ, 4)
   })
 
   it('decodes a truncated payload as zero-padded (MAVLink v2 trailing-zero truncation)', () => {

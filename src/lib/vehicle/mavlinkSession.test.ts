@@ -20,6 +20,9 @@ import {
   MISSION_ITEM_INT,
   MISSION_REQUEST_INT,
   MISSION_REQUEST_LIST,
+  SYS_STATUS,
+  VFR_HUD,
+  WIND,
 } from './mavlink/messages'
 import { GCS_COMPID, GCS_SYSID, MavlinkSession } from './mavlinkSession'
 import type { MissionWaypoint } from './types'
@@ -157,6 +160,74 @@ describe('MavlinkSession + FakeVehicle', () => {
     expect(result.uploadedCount).toBe(0)
     expect(result.readBack).toEqual([])
     expect(result.verified).toBe(true)
+  })
+})
+
+describe('MavlinkSession telemetry decoding', () => {
+  function sendFromVehicle(session: MavlinkSession, def: Parameters<typeof encodeFrame>[0], values: Record<string, number>) {
+    const frame = encodeFrame(def, values, { sysid: VEHICLE_SYSID, compid: VEHICLE_COMPID, seq: 0 })
+    session.feedBytes(frame)
+  }
+
+  it('decodes HEARTBEAT into systemStatus and flightMode (ArduCopter custom_mode)', () => {
+    const { session } = setUp()
+    // baseMode 217 = 0b11011001 has bit 0 (CUSTOM_MODE_ENABLED) set; custom_mode 5 = Loiter.
+    sendFromVehicle(session, HEARTBEAT, { customMode: 5, type: 2, autopilot: 3, baseMode: 217, systemStatus: 4, mavlinkVersion: 3 })
+    const telemetry = session.getTelemetry()
+    expect(telemetry.systemStatus).toBe('active')
+    expect(telemetry.flightMode).toBe('Loiter')
+  })
+
+  it('falls back to a numbered mode label for an unrecognized custom_mode', () => {
+    const { session } = setUp()
+    sendFromVehicle(session, HEARTBEAT, { customMode: 99, type: 2, autopilot: 3, baseMode: 217, systemStatus: 3, mavlinkVersion: 3 })
+    expect(session.getTelemetry().flightMode).toBe('Mode 99')
+    expect(session.getTelemetry().systemStatus).toBe('standby')
+  })
+
+  it('leaves flightMode null when the custom-mode-enabled bit is not set', () => {
+    const { session } = setUp()
+    sendFromVehicle(session, HEARTBEAT, { customMode: 5, type: 2, autopilot: 3, baseMode: 0, systemStatus: 4, mavlinkVersion: 3 })
+    expect(session.getTelemetry().flightMode).toBeNull()
+  })
+
+  it('decodes SYS_STATUS battery voltage/remaining, normalizing the -1 "unknown" sentinel to null', () => {
+    const { session } = setUp()
+    sendFromVehicle(session, SYS_STATUS, {
+      onboardControlSensorsPresent: 0,
+      onboardControlSensorsEnabled: 0,
+      onboardControlSensorsHealth: 0,
+      load: 0,
+      voltageBattery: 12345, // 12.345V
+      currentBattery: -1,
+      dropRateComm: 0,
+      errorsComm: 0,
+      errorsCount1: 0,
+      errorsCount2: 0,
+      errorsCount3: 0,
+      errorsCount4: 0,
+      batteryRemaining: -1,
+    })
+    const battery = session.getTelemetry().battery
+    expect(battery?.voltageV).toBeCloseTo(12.345, 5)
+    expect(battery?.remainingPct).toBeNull()
+  })
+
+  it('decodes VFR_HUD into altitudeM and headingDeg', () => {
+    const { session } = setUp()
+    sendFromVehicle(session, VFR_HUD, { airspeed: 0, groundspeed: 3.2, alt: 42.5, climb: 0, heading: 180, throttle: 30 })
+    const telemetry = session.getTelemetry()
+    expect(telemetry.altitudeM).toBeCloseTo(42.5, 4)
+    expect(telemetry.headingDeg).toBe(180)
+  })
+
+  it('decodes WIND when the vehicle sends it — stays null otherwise, never invented', () => {
+    const { session } = setUp()
+    expect(session.getTelemetry().wind).toBeNull()
+    sendFromVehicle(session, WIND, { direction: 90, speed: 2.1, speedZ: 0 })
+    const wind = session.getTelemetry().wind
+    expect(wind?.directionDeg).toBeCloseTo(90, 4)
+    expect(wind?.speedMps).toBeCloseTo(2.1, 4)
   })
 })
 

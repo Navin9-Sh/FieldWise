@@ -12,6 +12,7 @@
  */
 import { encodeFrame, MavlinkFrameReader, type DecodedFrame } from './mavlink/codec'
 import {
+  ARDUCOPTER_MODE_LABELS,
   ATTITUDE,
   GLOBAL_POSITION_INT,
   GPS_RAW_INT,
@@ -19,7 +20,9 @@ import {
   MAV_AUTOPILOT_INVALID,
   MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
   MAV_MISSION_ACCEPTED,
+  MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
   MAV_STATE_ACTIVE,
+  MAV_STATE_LABELS,
   MAV_TYPE_GCS,
   MISSION_ACK,
   MISSION_COUNT,
@@ -27,6 +30,9 @@ import {
   MISSION_REQUEST,
   MISSION_REQUEST_INT,
   MISSION_REQUEST_LIST,
+  SYS_STATUS,
+  VFR_HUD,
+  WIND,
 } from './mavlink/messages'
 import type { MissionUploadResult, MissionWaypoint, VehicleLinkEvents, VehicleTelemetry } from './types'
 import { EMPTY_TELEMETRY } from './types'
@@ -119,7 +125,33 @@ export class MavlinkSession {
       this.lastHeartbeatAt = Date.now()
       this.vehicleSysId = frame.sysid
       this.vehicleCompId = frame.compid
-      this.telemetry = { ...this.telemetry, heartbeatOk: true, heartbeatAgeMs: 0 }
+      const f = frame.fields
+      const customModeEnabled = (f.baseMode & MAV_MODE_FLAG_CUSTOM_MODE_ENABLED) !== 0
+      this.telemetry = {
+        ...this.telemetry,
+        heartbeatOk: true,
+        heartbeatAgeMs: 0,
+        systemStatus: MAV_STATE_LABELS[f.systemStatus] ?? `status ${f.systemStatus}`,
+        flightMode: customModeEnabled ? (ARDUCOPTER_MODE_LABELS[f.customMode] ?? `Mode ${f.customMode}`) : null,
+      }
+      this.emitTelemetry()
+    } else if (frame.msgId === SYS_STATUS.id) {
+      const f = frame.fields
+      this.telemetry = {
+        ...this.telemetry,
+        battery: {
+          voltageV: f.voltageBattery === 65535 ? null : f.voltageBattery / 1000, // UINT16_MAX = "unknown", same convention GPS_RAW_INT.eph uses
+          remainingPct: f.batteryRemaining === -1 ? null : f.batteryRemaining,
+        },
+      }
+      this.emitTelemetry()
+    } else if (frame.msgId === VFR_HUD.id) {
+      const f = frame.fields
+      this.telemetry = { ...this.telemetry, altitudeM: f.alt, headingDeg: f.heading }
+      this.emitTelemetry()
+    } else if (frame.msgId === WIND.id) {
+      const f = frame.fields
+      this.telemetry = { ...this.telemetry, wind: { speedMps: f.speed, directionDeg: f.direction } }
       this.emitTelemetry()
     } else if (frame.msgId === GPS_RAW_INT.id) {
       const f = frame.fields

@@ -52,6 +52,28 @@ export const HEARTBEAT: MessageDef = {
   ],
 }
 
+export const SYS_STATUS: MessageDef = {
+  id: 1,
+  name: 'SYS_STATUS',
+  payloadLength: 43,
+  crcExtra: 124,
+  fields: [
+    { name: 'onboardControlSensorsPresent', offset: 0, type: 'uint32' },
+    { name: 'onboardControlSensorsEnabled', offset: 4, type: 'uint32' },
+    { name: 'onboardControlSensorsHealth', offset: 8, type: 'uint32' },
+    { name: 'load', offset: 12, type: 'uint16' },
+    { name: 'voltageBattery', offset: 14, type: 'uint16' },
+    { name: 'currentBattery', offset: 16, type: 'int16' },
+    { name: 'dropRateComm', offset: 18, type: 'uint16' },
+    { name: 'errorsComm', offset: 20, type: 'uint16' },
+    { name: 'errorsCount1', offset: 22, type: 'uint16' },
+    { name: 'errorsCount2', offset: 24, type: 'uint16' },
+    { name: 'errorsCount3', offset: 26, type: 'uint16' },
+    { name: 'errorsCount4', offset: 28, type: 'uint16' },
+    { name: 'batteryRemaining', offset: 30, type: 'int8' },
+  ],
+}
+
 export const GPS_RAW_INT: MessageDef = {
   id: 24,
   name: 'GPS_RAW_INT',
@@ -84,6 +106,40 @@ export const ATTITUDE: MessageDef = {
     { name: 'rollspeed', offset: 16, type: 'float' },
     { name: 'pitchspeed', offset: 20, type: 'float' },
     { name: 'yawspeed', offset: 24, type: 'float' },
+  ],
+}
+
+export const VFR_HUD: MessageDef = {
+  id: 74,
+  name: 'VFR_HUD',
+  payloadLength: 20,
+  crcExtra: 20,
+  fields: [
+    { name: 'airspeed', offset: 0, type: 'float' },
+    { name: 'groundspeed', offset: 4, type: 'float' },
+    { name: 'alt', offset: 8, type: 'float' },
+    { name: 'climb', offset: 12, type: 'float' },
+    { name: 'heading', offset: 16, type: 'int16' },
+    { name: 'throttle', offset: 18, type: 'uint16' },
+  ],
+}
+
+/**
+ * ArduPilot-legacy wind estimate — not part of the shared `common`
+ * dialect (it's in `ardupilotmega`), and not every ArduCopter
+ * configuration emits it. Modeled the same way GPS/HDOP already are:
+ * read if present, rendered as "—" if this message never arrives,
+ * never assumed.
+ */
+export const WIND: MessageDef = {
+  id: 168,
+  name: 'WIND',
+  payloadLength: 12,
+  crcExtra: 1,
+  fields: [
+    { name: 'direction', offset: 0, type: 'float' },
+    { name: 'speed', offset: 4, type: 'float' },
+    { name: 'speedZ', offset: 8, type: 'float' },
   ],
 }
 
@@ -199,8 +255,11 @@ export const MISSION_ITEM_INT: MessageDef = {
 export const MESSAGE_REGISTRY: Record<number, MessageDef> = Object.fromEntries(
   [
     HEARTBEAT,
+    SYS_STATUS,
     GPS_RAW_INT,
     ATTITUDE,
+    VFR_HUD,
+    WIND,
     GLOBAL_POSITION_INT,
     MISSION_REQUEST,
     MISSION_REQUEST_LIST,
@@ -237,3 +296,43 @@ export const GPS_FIX_TYPE_LABELS: Record<number, string> = {
   6: 'RTK fixed',
   8: 'static',
 }
+
+// MAV_STATE (HEARTBEAT.system_status) — the vehicle's own top-level status, independent of flight mode.
+export const MAV_STATE_LABELS: Record<number, string> = {
+  0: 'uninitialized',
+  1: 'booting',
+  2: 'calibrating',
+  3: 'standby',
+  4: 'active',
+  5: 'critical',
+  6: 'emergency',
+  7: 'powering off',
+  8: 'flight termination',
+}
+
+/**
+ * ArduCopter's custom_mode -> name mapping (HEARTBEAT.custom_mode, when
+ * base_mode has MAV_MODE_FLAG_CUSTOM_MODE_ENABLED set, which ArduPilot
+ * always does). This is Copter-specific by design — this project's
+ * drone profiles are all multirotor sprayers — Plane/Rover number the
+ * same values differently, so this table would mislabel those. Falls
+ * back to "Mode N" for anything not listed rather than guessing.
+ */
+export const ARDUCOPTER_MODE_LABELS: Record<number, string> = {
+  0: 'Stabilize',
+  2: 'Alt Hold',
+  3: 'Auto',
+  4: 'Guided',
+  5: 'Loiter',
+  6: 'RTL',
+  9: 'Land',
+  11: 'Drift',
+  13: 'Sport',
+  16: 'PosHold',
+  17: 'Brake',
+  20: 'Guided (no GPS)',
+  21: 'Smart RTL',
+}
+
+// MAV_MODE_FLAG_CUSTOM_MODE_ENABLED — bit in HEARTBEAT.base_mode indicating custom_mode is meaningful.
+export const MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 0b00000001
