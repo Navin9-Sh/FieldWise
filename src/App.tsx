@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
-import { FieldMap, type CorrectionTarget, type DrawTarget, type SimulateOverlay } from '@/components/map/FieldMap'
+import { FieldMap, type CorrectionTarget, type DrawTarget, type FlyToRequest, type SimulateOverlay } from '@/components/map/FieldMap'
 import { ExportPanel } from '@/components/panels/ExportPanel'
 import { ImportPanel } from '@/components/panels/ImportPanel'
+import type { SelectedLocation } from '@/components/panels/LocationSearch'
 import { PlanPanel } from '@/components/panels/PlanPanel'
 import { SendPanel } from '@/components/panels/SendPanel'
 import { SimulatePanel } from '@/components/panels/SimulatePanel'
@@ -34,6 +35,15 @@ function App() {
   const [correctionTarget, setCorrectionTarget] = useState<CorrectionTarget | null>(null)
   const [cropRowTapActive, setCropRowTapActive] = useState(false)
   const [simulateOverlay, setSimulateOverlay] = useState<SimulateOverlay | null>(null)
+  const [flyTo, setFlyTo] = useState<FlyToRequest | null>(null)
+
+  // A fresh object every time (even for an identical place searched
+  // twice), so FieldMap's effect — keyed on this whole object's
+  // identity — re-triggers the camera move each time, not just the
+  // first.
+  const handleLocationSelected = (location: SelectedLocation) => {
+    setFlyTo({ lat: location.lat, lon: location.lon, boundingBox: location.boundingBox })
+  }
 
   const handleDrawFinish = (vertices: LatLng[]) => {
     if (drawTarget === 'boundary') {
@@ -78,6 +88,7 @@ function App() {
                 onStartDrawZone={() => setDrawTarget('zone')}
                 onCancelDraw={() => setDrawTarget(null)}
                 onGpsWalkPointsChange={setLiveWalkPath}
+                onLocationSelected={handleLocationSelected}
               />
             )}
             {currentStep === 'verify' && (
@@ -118,6 +129,7 @@ function App() {
             cropRowTapActive={cropRowTapActive}
             onCropRowTap={handleCropRowTap}
             simulateOverlay={simulateOverlay}
+            flyTo={flyTo}
           />
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { DrawTarget } from '@/components/map/FieldMap'
 import { GpsWalkCapture } from '@/components/panels/GpsWalkCapture'
+import { LocationSearch, type SelectedLocation } from '@/components/panels/LocationSearch'
 import { Button } from '@/components/ui/Button'
 import { createBoundary } from '@/lib/geo/boundary'
 import { BoundaryImportError, parseBoundaryFile } from '@/lib/geo/importFormats'
@@ -13,6 +14,7 @@ interface ImportPanelProps {
   onStartDrawZone: () => void
   onCancelDraw: () => void
   onGpsWalkPointsChange: (points: LatLng[]) => void
+  onLocationSelected: (location: SelectedLocation) => void
 }
 
 export function ImportPanel({
@@ -21,6 +23,7 @@ export function ImportPanel({
   onStartDrawZone,
   onCancelDraw,
   onGpsWalkPointsChange,
+  onLocationSelected,
 }: ImportPanelProps) {
   const boundary = useFieldStore((s) => s.boundary)
   const noSprayZones = useFieldStore((s) => s.noSprayZones)
@@ -61,6 +64,10 @@ export function ImportPanel({
           until it's verified in the next step.
         </p>
       </div>
+
+      <LocationSearch onLocationSelected={onLocationSelected} />
+
+      <div className="h-px bg-(--border-subtle)" />
 
       <Button variant="primary" onClick={loadSample}>
         Load sample field

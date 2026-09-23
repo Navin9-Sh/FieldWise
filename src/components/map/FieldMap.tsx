@@ -90,6 +90,22 @@ interface FieldMapProps {
 
   /** Blind vs. Sighted replay: the scored boundary + heatmap for whichever run is currently being viewed. */
   simulateOverlay: SimulateOverlay | null
+
+  /**
+   * A place search result or "use my current location" request — purely
+   * a camera move, never touches boundary/session state. A new object
+   * (even with identical coordinates to the last one) re-triggers the
+   * fly/fit; App.tsx creates a fresh object per selection for exactly
+   * that reason.
+   */
+  flyTo: FlyToRequest | null
+}
+
+export interface FlyToRequest {
+  lat: number
+  lon: number
+  /** [south, north, west, east] — when present, the camera fits this whole extent rather than a fixed zoom level. */
+  boundingBox: [number, number, number, number] | null
 }
 
 export interface SimulateOverlay {
@@ -163,6 +179,7 @@ export function FieldMap({
   cropRowTapActive,
   onCropRowTap,
   simulateOverlay,
+  flyTo,
 }: FieldMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -636,6 +653,29 @@ export function FieldMap({
       lastFittedBoundaryId.current = null
     }
   }, [boundary, loaded])
+
+  // Place search / "use my current location" — purely a camera move.
+  // Fits the whole result's extent when Nominatim gave one (a
+  // village/city search reads very differently at a fixed zoom than an
+  // exact address would); falls back to a fixed zoom for a bare point
+  // (e.g. geolocation, which has no bounding box).
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded || !flyTo) return
+
+    if (flyTo.boundingBox) {
+      const [south, north, west, east] = flyTo.boundingBox
+      map.fitBounds(
+        [
+          [west, south],
+          [east, north],
+        ],
+        { padding: 64, duration: 1200, maxZoom: 17 },
+      )
+    } else {
+      map.flyTo({ center: [flyTo.lon, flyTo.lat], zoom: 16, duration: 1200 })
+    }
+  }, [flyTo, loaded])
 
   // Selection highlight (feature-state), independent of the data refresh above.
   useEffect(() => {
