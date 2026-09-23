@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/Button'
 import type { LocalProjection } from '@/lib/geo/projection'
 import { SAMPLE_FIELD_CENTER } from '@/lib/geo/sampleField'
 import type { FieldBoundary, LatLng, NoSprayZone, SprayPlan } from '@/lib/geo/types'
-import { SATELLITE_LAYER_ID, SATELLITE_SOURCE_ID, SATELLITE_STYLE } from '@/lib/map/basemap'
+import { SATELLITE_LAYER_ID, SATELLITE_SOURCE_ID, SATELLITE_STYLE, setBaseMapMode, type BaseMapMode } from '@/lib/map/basemap'
 import { onTileSourceStatusChange, registerResilientSatelliteProtocol, retryTileSource } from '@/lib/map/resilientSatelliteTiles'
 import {
   accuracyCircleFeature,
@@ -187,6 +187,7 @@ export function FieldMap({
   const [drawVertices, setDrawVertices] = useState<LatLng[]>([])
   const lastFittedBoundaryId = useRef<string | null>(null)
   const [usingFallbackTiles, setUsingFallbackTiles] = useState(false)
+  const [baseMapMode, setBaseMapModeState] = useState<BaseMapMode>('satellite')
 
   // Correction (walk-strip / trim-edge) drag session state.
   const [walkTrace, setWalkTrace] = useState<LatLng[]>([])
@@ -836,7 +837,7 @@ export function FieldMap({
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
 
-      {usingFallbackTiles && (
+      {usingFallbackTiles && baseMapMode === 'satellite' && (
         <div className="pointer-events-none absolute left-1/2 top-4 z-30 -translate-x-1/2">
           <div className="pointer-events-auto flex items-center gap-2.5 rounded-(--radius-card) border border-warning/30 bg-warning-bg px-3.5 py-2 text-xs text-warning shadow-(--shadow-panel)">
             <svg viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
@@ -857,6 +858,33 @@ export function FieldMap({
           </div>
         </div>
       )}
+
+      <div className="absolute right-2.5 top-24 z-10">
+        <button
+          type="button"
+          onClick={() => {
+            const next = baseMapMode === 'satellite' ? 'street' : 'satellite'
+            setBaseMapModeState(next)
+            if (mapRef.current) setBaseMapMode(mapRef.current, next)
+          }}
+          title="Toggle between satellite and street map view"
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-(--border-subtle) bg-(--surface-panel) text-(--text-secondary) shadow-(--shadow-panel) transition-colors hover:bg-(--surface-panel-raised)"
+        >
+          {baseMapMode === 'satellite' ? (
+            // Currently satellite — icon hints at switching to the street/line map.
+            <svg viewBox="0 0 16 16" fill="none" className="h-4 w-4" aria-hidden="true">
+              <path d="M2 6l4-2 4 2 4-2v8l-4 2-4-2-4 2V6Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+              <path d="M6 4v8M10 6v8" stroke="currentColor" strokeWidth="1.3" />
+            </svg>
+          ) : (
+            // Currently street — icon hints at switching to satellite imagery.
+            <svg viewBox="0 0 16 16" fill="none" className="h-4 w-4" aria-hidden="true">
+              <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M2 9.5 6 6l3 2.5 5-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </button>
+      </div>
 
       {showGetStarted && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

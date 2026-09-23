@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
 import { StatCard } from '@/components/ui/StatCard'
+import type { LatLng } from '@/lib/geo/types'
 import { sprayPlanToWaypoints } from '@/lib/vehicle/missionFromPlan'
 import type { ConnectionState, MissionUploadResult, VehicleTelemetry } from '@/lib/vehicle/types'
 import { EMPTY_TELEMETRY } from '@/lib/vehicle/types'
@@ -65,7 +66,12 @@ function HeadingCompass({ headingDeg }: { headingDeg: number }) {
   )
 }
 
-export function SendPanel() {
+interface SendPanelProps {
+  /** AeroGCS Green's "Drone Location" button — recenters the map on the vehicle's current GPS fix. Only ever called with a non-null position (the button that triggers it is itself gated on telemetry.gps.position existing). */
+  onCenterOnDrone: (position: LatLng) => void
+}
+
+export function SendPanel({ onCenterOnDrone }: SendPanelProps) {
   const boundary = useFieldStore((s) => s.boundary)
   const sprayPlan = useFieldStore((s) => s.sprayPlan)
   const projection = useFieldStore((s) => s.projection)
@@ -234,8 +240,13 @@ export function SendPanel() {
           </div>
 
           {telemetry.gps.position && (
-            <div className="text-xs text-(--text-secondary)">
-              {telemetry.gps.position.lat.toFixed(6)}, {telemetry.gps.position.lon.toFixed(6)}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-(--text-secondary)">
+                {telemetry.gps.position.lat.toFixed(6)}, {telemetry.gps.position.lon.toFixed(6)}
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => onCenterOnDrone(telemetry.gps.position!)}>
+                Center map on drone
+              </Button>
             </div>
           )}
           <div className="text-[11px] text-(--text-muted)">

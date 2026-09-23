@@ -50,6 +50,10 @@ function App() {
     setFlyTo({ lat: location.lat, lon: location.lon, boundingBox: location.boundingBox })
   }
 
+  const handleCenterOnDrone = (position: LatLng) => {
+    setFlyTo({ lat: position.lat, lon: position.lon, boundingBox: null })
+  }
+
   const handleDrawFinish = (vertices: LatLng[]) => {
     if (drawTarget === 'boundary') {
       setBoundary(createBoundary(vertices, 'satellite-trace', { imageryDate: new Date().toISOString().slice(0, 10) }))
@@ -110,7 +114,7 @@ function App() {
             )}
             {currentStep === 'simulate' && <SimulatePanel onOverlayChange={setSimulateOverlay} />}
             {currentStep === 'export' && <ExportPanel />}
-            {currentStep === 'send' && <SendPanel />}
+            {currentStep === 'send' && <SendPanel onCenterOnDrone={handleCenterOnDrone} />}
           </div>
         </aside>
 
