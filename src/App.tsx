@@ -5,15 +5,19 @@ import { ExportPanel } from '@/components/panels/ExportPanel'
 import { ImportPanel } from '@/components/panels/ImportPanel'
 import type { SelectedLocation } from '@/components/panels/LocationSearch'
 import { PlanPanel } from '@/components/panels/PlanPanel'
+import { ProjectsPanel } from '@/components/panels/ProjectsPanel'
 import { SendPanel } from '@/components/panels/SendPanel'
 import { SimulatePanel } from '@/components/panels/SimulatePanel'
 import { VerifyPanel } from '@/components/panels/VerifyPanel'
+import { useProjectAutosave } from '@/hooks/useProjectAutosave'
 import { createBoundary } from '@/lib/geo/boundary'
 import { headingDegBetween } from '@/lib/geo/projection'
 import type { LatLng } from '@/lib/geo/types'
 import { useFieldStore } from '@/store/useFieldStore'
 
 function App() {
+  useProjectAutosave()
+
   const currentStep = useFieldStore((s) => s.currentStep)
   const boundary = useFieldStore((s) => s.boundary)
   const noSprayZones = useFieldStore((s) => s.noSprayZones)
@@ -36,6 +40,7 @@ function App() {
   const [cropRowTapActive, setCropRowTapActive] = useState(false)
   const [simulateOverlay, setSimulateOverlay] = useState<SimulateOverlay | null>(null)
   const [flyTo, setFlyTo] = useState<FlyToRequest | null>(null)
+  const [projectsOpen, setProjectsOpen] = useState(false)
 
   // A fresh object every time (even for an identical place searched
   // twice), so FieldMap's effect — keyed on this whole object's
@@ -77,7 +82,8 @@ function App() {
   }
 
   return (
-    <AppShell>
+    <AppShell onOpenProjects={() => setProjectsOpen(true)}>
+      <ProjectsPanel open={projectsOpen} onClose={() => setProjectsOpen(false)} />
       <div className="flex flex-1 min-h-0">
         <aside className="w-[380px] shrink-0 overflow-hidden border-r border-(--border-subtle) bg-(--surface-app)">
           <div key={currentStep} className="panel-transition h-full">

@@ -19,6 +19,7 @@ import type {
   SprayPlan,
   SweepStrategy,
 } from '@/lib/geo/types'
+import { DEFAULT_PROJECT_NAME, type ProjectSnapshot } from '@/lib/storage/project'
 
 /** The six-step pilot workflow, matches the header stepper 1:1. */
 export const WORKFLOW_STEPS = ['import', 'verify', 'plan', 'simulate', 'export', 'send'] as const
@@ -54,6 +55,15 @@ interface FieldState {
   selectedEdgeId: string | null
 
   /**
+   * Which saved project (see lib/storage/project.ts) this session is —
+   * null until the pilot's first field-producing action lazily creates
+   * one (see App.tsx's autosave effect), so opening the app and just
+   * looking around never writes an empty "Untitled Project" to disk.
+   */
+  activeProjectId: string | null
+  activeProjectName: string
+
+  /**
    * How long the last recompute() took, in milliseconds. Displayed live
    * in the header so "the plan re-plans in ~1s after a correction" is a
    * number judges can watch, not a claim to take on faith.
@@ -73,6 +83,11 @@ interface FieldState {
   revokeRisk: (edgeId: string) => void
   loadSample: () => void
   reset: () => void
+
+  /** Sets which project this session is, without touching any session data — used when a project is first lazily created or explicitly renamed. */
+  setActiveProject: (id: string | null, name: string) => void
+  /** Atomically replaces the whole session with a saved project's snapshot — the "Open project" action. */
+  loadProjectSnapshot: (id: string, name: string, snapshot: ProjectSnapshot) => void
 }
 
 interface DerivedFields {
@@ -146,6 +161,8 @@ const initialState = {
   readiness: null as ReadinessSummary | null,
   selectedEdgeId: null as string | null,
   lastRecomputeMs: null as number | null,
+  activeProjectId: null as string | null,
+  activeProjectName: DEFAULT_PROJECT_NAME,
 }
 
 /**
@@ -227,6 +244,21 @@ export const useFieldStore = create<FieldState>((set) => ({
       currentStep: state.currentStep === 'import' ? 'verify' : state.currentStep,
     }))
   },
+
+  setActiveProject: (activeProjectId, activeProjectName) => set({ activeProjectId, activeProjectName }),
+
+  loadProjectSnapshot: (activeProjectId, activeProjectName, snapshot) =>
+    set(() => ({
+      activeProjectId,
+      activeProjectName,
+      boundary: snapshot.boundary,
+      noSprayZones: snapshot.noSprayZones,
+      droneProfile: snapshot.droneProfile,
+      sweepStrategy: snapshot.sweepStrategy,
+      selectedEdgeId: null,
+      currentStep: snapshot.boundary ? 'verify' : 'import',
+      ...recompute(snapshot),
+    })),
 
   reset: () => set(initialState),
 }))

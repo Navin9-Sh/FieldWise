@@ -6,15 +6,18 @@ import { useFieldStore, type WorkflowStep, WORKFLOW_STEPS } from '@/store/useFie
 
 interface AppShellProps {
   children: ReactNode
+  onOpenProjects: () => void
 }
 
-export function AppShell({ children }: AppShellProps) {
+export function AppShell({ children, onOpenProjects }: AppShellProps) {
   const currentStep = useFieldStore((s) => s.currentStep)
   const setStep = useFieldStore((s) => s.setStep)
   const boundary = useFieldStore((s) => s.boundary)
   const sprayPlan = useFieldStore((s) => s.sprayPlan)
   const readiness = useFieldStore((s) => s.readiness)
   const lastRecomputeMs = useFieldStore((s) => s.lastRecomputeMs)
+  const activeProjectId = useFieldStore((s) => s.activeProjectId)
+  const activeProjectName = useFieldStore((s) => s.activeProjectName)
 
   // Gate later steps behind having the data they need — prevents the
   // pilot from landing on "Send to Vehicle" with nothing planned.
@@ -37,7 +40,21 @@ export function AppShell({ children }: AppShellProps) {
           </div>
           <div className="leading-tight">
             <div className="text-sm font-semibold text-(--text-primary)">FieldWise</div>
-            <div className="text-xs text-(--text-muted)">Field-Truth spray planning</div>
+            <button
+              type="button"
+              onClick={onOpenProjects}
+              className="flex items-center gap-1 text-xs text-(--text-muted) transition-colors hover:text-brand-600"
+              title="Open, rename, or create projects"
+            >
+              <svg viewBox="0 0 16 16" fill="none" className="h-3 w-3 shrink-0" aria-hidden="true">
+                <path
+                  d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1 1.2h5.4A1.5 1.5 0 0 1 14 5.7v6.8A1.5 1.5 0 0 1 12.5 14h-9A1.5 1.5 0 0 1 2 12.5v-8Z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                />
+              </svg>
+              {activeProjectId ? activeProjectName : 'Projects'}
+            </button>
           </div>
         </div>
 
