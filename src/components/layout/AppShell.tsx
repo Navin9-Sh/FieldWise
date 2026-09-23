@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { ReadinessBadge } from './ReadinessBadge'
 import { RecomputeTimingBadge } from './RecomputeTimingBadge'
+import { SettingsMenu } from './SettingsMenu'
 import { Stepper } from './Stepper'
 import { useFieldStore, type WorkflowStep, WORKFLOW_STEPS } from '@/store/useFieldStore'
 
@@ -63,6 +64,7 @@ export function AppShell({ children, onOpenProjects }: AppShellProps) {
         <div className="flex shrink-0 items-center gap-2.5">
           <RecomputeTimingBadge lastRecomputeMs={lastRecomputeMs} />
           <ReadinessBadge readiness={readiness} />
+          <SettingsMenu />
         </div>
       </header>
 
